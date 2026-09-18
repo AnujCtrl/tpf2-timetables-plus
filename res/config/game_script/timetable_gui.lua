@@ -1220,8 +1220,11 @@ function data()
             -- TODO: check if needed
             state.timetable = timetable.getTimetableObject()
 
-            local lines = game.interface.getLines()
-            for _, line in pairs(lines) do
+            -- Only lines using auto_debounce consume a cached frequency, and
+            -- addFrequency discards it for every other line. Polling all of
+            -- them built a full entity table per line per tick, via the
+            -- legacy game.interface, and threw nearly all of it away.
+            for _, line in pairs(timetable.linesNeedingFrequency()) do
                 timetable.addFrequency(line, timetableHelper.getFrequency(line))
             end
         end,

@@ -155,6 +155,26 @@ function timetable.addFrequency(line, frequency)
     timetableObject[line].frequency = frequency
 end
 
+---Lines whose cached frequency is actually consumed.
+---Only autoDebounceDepartureTime reads timetableObject[line].frequency, and
+---addFrequency discards the value for any line not in the timetable. Polling
+---every line in the game therefore does the expensive work and throws it away.
+---@return table array of line ids
+function timetable.linesNeedingFrequency()
+    local res = {}
+    for lineID, lineInfo in pairs(timetableObject) do
+        if lineInfo.hasTimetable and lineInfo.stations then
+            for _, stopInfo in pairs(lineInfo.stations) do
+                if stopInfo.conditions and stopInfo.conditions.type == "auto_debounce" then
+                    res[#res + 1] = lineID
+                    break
+                end
+            end
+        end
+    end
+    return res
+end
+
 
 -- TEST: timetable.addCondition(1,1,{type = "ArrDep", ArrDep = {{12,14,14,14}}})
 function timetable.addCondition(line, stationNumber, condition)

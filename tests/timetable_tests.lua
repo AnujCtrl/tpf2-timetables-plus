@@ -700,6 +700,29 @@ timetableTests[#timetableTests + 1] = function()
     assert(cond[1] == nil and cond[2] == nil,
         "computing a departure must not write defaults into the condition")
 end
+
+-- S3-1: the cached frequency is consumed only by auto_debounce. Any other
+-- line's frequency is fetched and thrown away, so the per-tick poll must be
+-- able to name just the lines that need one.
+timetableTests[#timetableTests + 1] = function()
+    timetable.setTimetableObject({
+        [1] = {hasTimetable = true, stations = {
+            [1] = {conditions = {type = "ArrDep", ArrDep = {}}},
+            [2] = {conditions = {type = "auto_debounce", auto_debounce = {1, 0}}},
+        }},
+        [2] = {hasTimetable = true, stations = {
+            [1] = {conditions = {type = "ArrDep", ArrDep = {}}},
+        }},
+        [3] = {hasTimetable = false, stations = {
+            [1] = {conditions = {type = "auto_debounce", auto_debounce = {1, 0}}},
+        }},
+    })
+
+    local needed = timetable.linesNeedingFrequency()
+
+    assert(#needed == 1, "only one line uses auto_debounce with a timetable, got " .. #needed)
+    assert(needed[1] == 1, "line 1 is the one needing a frequency")
+end
 return {
     test = function()
         for k,v in pairs(timetableTests) do
