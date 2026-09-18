@@ -150,19 +150,28 @@ end
 -- returns departure time of previous vehicle
 function timetableHelper.getPreviousDepartureTime(stop, vehicles, vehiclesWaiting)
     if type(stop) == "string" then stop = tonumber(stop) end
-    if not(type(stop) == "number") then print("Expected String or Number") return false end
+    if not(type(stop) == "number") then print("Expected String or Number") return nil end
 
     local departureTimes = {}
     for _,v in pairs(vehicles) do
-        -- append to a list using a[#a + 1] = new_item
         local lineVehicle = api.engine.getComponent(v, api.type.ComponentType.TRANSPORT_VEHICLE)
-        departureTimes[#departureTimes + 1] = lineVehicle.lineStopDepartures[stop]/1000
+        -- A vehicle that has not yet departed this stop has no entry here.
+        -- Dividing that nil crashed the engine thread.
+        local departure = lineVehicle
+            and lineVehicle.lineStopDepartures
+            and lineVehicle.lineStopDepartures[stop]
+        if departure then
+            departureTimes[#departureTimes + 1] = departure / 1000
+        end
     end
 
     for _, vehicleWaiting in pairs(vehiclesWaiting) do
-        departureTimes[#departureTimes + 1] = vehicleWaiting.departureTime
+        if vehicleWaiting.departureTime then
+            departureTimes[#departureTimes + 1] = vehicleWaiting.departureTime
+        end
     end
 
+    -- nil when nothing is known yet; callers must treat that as "no constraint".
     return (timetableHelper.maximumArray(departureTimes))
 end
 

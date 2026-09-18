@@ -570,6 +570,114 @@ timetableTests[#timetableTests+1] = function ()
     assert(x, "Shouldn't wait for train")
 end
 
+-- S1-1: the force departure toggle must be readable, not permanently false.
+-- Regression guard for d72fbc5, which flipped both the condition and the
+-- return so every path yielded false.
+timetableTests[#timetableTests + 1] = function()
+    timetable.setTimetableObject({})
+    timetable.setHasTimetable(1, true)
+
+    -- default: off, as d72fbc5 intended
+    assert(timetable.getForceDepartureEnabled(1) == false,
+        "force departure should default to false")
+
+    timetable.setForceDepartureEnabled(1, true)
+    assert(timetable.getForceDepartureEnabled(1) == true,
+        "force departure should read back true once enabled")
+
+    timetable.setForceDepartureEnabled(1, false)
+    assert(timetable.getForceDepartureEnabled(1) == false,
+        "force departure should read back false once disabled")
+
+    -- an unknown line must not report enabled
+    assert(timetable.getForceDepartureEnabled(999) == false,
+        "force departure should be false for a line with no timetable")
+end
+
+
+-- S2-2: must consider every vehicle at the stop, not just the first one
+-- pairs() happens to yield. Vehicle 3 arrived earliest but is listed last.
+timetableTests[#timetableTests + 1] = function()
+    timetable.setTimetableObject({})
+    local info = {
+        [1] = {doorsOpen = true, doorsTime = 100 * 1000000},
+        [2] = {doorsOpen = true, doorsTime = 200 * 1000000},
+        [3] = {doorsOpen = true, doorsTime =  50 * 1000000},
+    }
+    mockTimetableHelper.getVehiclesAtStop = function(line, stop) return {1, 2, 3} end
+    mockTimetableHelper.getVehicleInfo = function(v) return info[v] end
+
+    -- vehicle 1 arrived at 100; vehicle 3 arrived at 50, so someone was earlier
+    assert(timetable.anotherVehicleArrivedEarlier(1, 100, 1, 1) == true,
+        "should detect an earlier vehicle listed after a later one")
+
+    -- vehicle 3 arrived first, so nobody was earlier than it
+    assert(timetable.anotherVehicleArrivedEarlier(3, 50, 1, 1) == false,
+        "the earliest vehicle should see nobody ahead of it")
+end
+
+-- S2-4: getNextSlot must not reorder the caller's slot list. That list is
+-- persisted user configuration; a read path must not rewrite it.
+timetableTests[#timetableTests + 1] = function()
+    timetable.setTimetableObject({})
+    local slots = {{30,0,59,0},{9,0,59,0}}
+
+    timetable.getNextSlot(slots, 1200, {})
+
+    assert(slots[1][1] == 30 and slots[2][1] == 9,
+        "getNextSlot must leave the caller's slot order untouched")
+end
+
+-- S2-3: a stop configured as ArrDep but holding no slots must fall back to
+-- "None". The old guard compared `slots == {}`, which in Lua is always false
+-- because tables compare by identity, so the reset never happened.
+timetableTests[#timetableTests + 1] = function()
+    timetable.setTimetableObject({
+        [1] = {
+            hasTimetable = true,
+            stations = {
+                [1] = {stationID = 1, conditions = {type = "ArrDep", ArrDep = {}}}
+            }
+        }
+    })
+
+    local departed = timetable.readyToDepartArrDep(1, 100, {1}, 100, 1, 1, {})
+
+    assert(departed == true, "a stop with no slots should release the vehicle")
+    assert(timetable.getConditionType(1, 1) == "None",
+        "a stop with no slots should reset its condition type to None")
+end
+
+-- S2-5: with no previous departure known, unbunching has no constraint to work
+-- from. It must release the vehicle, not do arithmetic on nil.
+timetableTests[#timetableTests + 1] = function()
+    timetable.setTimetableObject({[1] = {hasTimetable = true, frequency = 600, stations = {}}})
+    mockTimetableHelper.getPreviousDepartureTime = function() return nil end
+    mockTimetableHelper.getLineInfo = function(line)
+        return {stops = {[1] = {minWaitingTime = 0, maxWaitingTime = 0}}}
+    end
+
+    local manual = timetable.manualDebounceDepartureTime(100, {1}, 100, 1, 1, {})
+    assert(manual == 100, "manual unbunch with no previous departure should depart at arrival")
+
+    local auto = timetable.autoDebounceDepartureTime(100, {1}, 100, 1, 1, {})
+    assert(auto == 100, "auto unbunch with no previous departure should depart at arrival")
+end
+
+-- S2-5: a line with no known frequency cannot be auto-unbunched. That must
+-- release the vehicle, not compare nil with a number.
+timetableTests[#timetableTests + 1] = function()
+    timetable.setTimetableObject({[1] = {hasTimetable = true, stations = {}}}) -- no frequency
+    mockTimetableHelper.getPreviousDepartureTime = function() return 50 end
+    mockTimetableHelper.getVehiclesAtStop = function() return {} end
+    mockTimetableHelper.getLineInfo = function(line)
+        return {stops = {[1] = {minWaitingTime = 0, maxWaitingTime = 0}}}
+    end
+
+    local ready = timetable.readyToDepartDebounce(1, 100, {1, 2}, 100, 1, 1, {}, false)
+
+    assert(ready == true, "auto unbunch on a line with no frequency should release the vehicle")
+end
 return {
     test = function()
         for k,v in pairs(timetableTests) do

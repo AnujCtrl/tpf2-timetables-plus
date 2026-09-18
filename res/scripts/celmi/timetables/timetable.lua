@@ -394,7 +394,7 @@ end
 ---@return boolean readyToDepart True if ready. False if waiting.
 function timetable.readyToDepartArrDep(vehicle, doorsTime, vehicles, currentTime, line, stop, vehiclesWaiting)
     local slots = timetableObject[line].stations[stop].conditions.ArrDep
-    if not slots or slots == {} then
+    if not slots or next(slots) == nil then
         timetableObject[line].stations[stop].conditions.type = "None"
         -- If there aren't any timetable slots, then the vehicle should depart now.
         return true
@@ -441,9 +441,9 @@ end
 
 function timetable.getForceDepartureEnabled(line)
     if timetableObject[line] then
-        -- if true or nil
-        if timetableObject[line].forceDeparture ~= true then
-            return false
+        -- explicit true only; nil and false both mean off
+        if timetableObject[line].forceDeparture == true then
+            return true
         end
     end
 
@@ -514,6 +514,11 @@ end
 
 function timetable.manualDebounceDepartureTime(arrivalTime, vehicles, time, line, stop, vehiclesWaiting)
     local previousDepartureTime = timetableHelper.getPreviousDepartureTime(stop, vehicles, vehiclesWaiting)
+    -- Nothing has departed this stop yet, so there is no unbunching
+    -- constraint to space against. Release the vehicle.
+    if not previousDepartureTime then
+        return timetable.getDepartureTime(line, stop, arrivalTime, 0)
+    end
     local condition = timetable.getConditions(line, stop, "debounce")
     if condition == -1 then condition = {0, 0} end
     if not condition[1] then condition[1] = 0 end
@@ -527,8 +532,17 @@ end
 
 function timetable.autoDebounceDepartureTime(arrivalTime, vehicles, time, line, stop, vehiclesWaiting)
     local previousDepartureTime = timetableHelper.getPreviousDepartureTime(stop, vehicles, vehiclesWaiting)
+    -- Nothing has departed this stop yet, so there is no unbunching
+    -- constraint to space against. Release the vehicle.
+    if not previousDepartureTime then
+        return timetable.getDepartureTime(line, stop, arrivalTime, 0)
+    end
     local frequency = timetableObject[line].frequency
-    if not frequency then return end
+    -- No frequency known (new line, or no vehicles on it yet): there is
+    -- nothing to space against, so release rather than hold the vehicle.
+    if not frequency then
+        return timetable.getDepartureTime(line, stop, arrivalTime, 0)
+    end
 
     local condition = timetable.getConditions(line, stop, "auto_debounce")
     if condition == -1 then condition = {1, 0} end
@@ -545,13 +559,15 @@ end
 function timetable.anotherVehicleArrivedEarlier(vehicle, arrivalTime, line, stop)
     local vehiclesAtStop = timetableHelper.getVehiclesAtStop(line, stop)
     if #vehiclesAtStop <= 1 then return false end
+    -- Scan every vehicle at the stop. Returning inside the loop on the first
+    -- one pairs() yields made this nondeterministic for busy stops.
     for _, otherVehicle in pairs(vehiclesAtStop) do
         if otherVehicle ~= vehicle then
             local otherVehicleInfo = timetableHelper.getVehicleInfo(otherVehicle)
-            if otherVehicleInfo.doorsOpen then
-                local otherArrivalTime = math.floor(otherVehicleInfo.doorsTime / 1000000)
-                return otherArrivalTime < arrivalTime
-            else
+            if not otherVehicleInfo.doorsOpen then
+                -- not loading: treat as already ahead of us
+                return true
+            elseif math.floor(otherVehicleInfo.doorsTime / 1000000) < arrivalTime then
                 return true
             end
         end
@@ -616,6 +632,11 @@ end
 ---@param vehiclesWaiting table in format like: {[1]={slot={30,0,59,0}, departureTime=3540}, [2]={slot={9,0,59,0}, departureTime=3540}}
 ---@return table | nil closestSlot example: {30,0,59,0}
 function timetable.getNextSlot(slots, arrivalTime, vehiclesWaiting)
+    -- Sort a copy. `slots` is the persisted conditions.ArrDep array, and a
+    -- read path must not rewrite the player's configured slot order.
+    local ordered = {}
+    for i, slot in ipairs(slots) do ordered[i] = slot end
+    slots = ordered
     -- Put the slots in chronological order by arrival time
     table.sort(slots, function(slot1, slot2)
         local arrivalSlot1 = timetable.slotToArrivalSlot(slot1)
