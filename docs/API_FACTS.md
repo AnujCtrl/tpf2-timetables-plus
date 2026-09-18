@@ -125,3 +125,104 @@ regulation — it has no notion of the gap to the preceding vehicle.
 5 Hz, "on average" — official. Do not assume a fixed tick; accumulate elapsed
 time where precision matters. This is the budget the S3-1 optimization was
 designed against.
+
+---
+
+# Binary-level findings (35924)
+
+From reading the `sol2` registration tables out of the stripped binary —
+string/`lea` cross-reference over `.text`, plus `R_X86_64_RELATIVE` relocations
+for the enum tables, plus demangled `usertype_metatable` template symbols for
+component field types. "Exists" below means the registration code that publishes
+the name was located and read, not that a string matched.
+
+## Everything checks out except two things
+
+`TRANSPORT_VEHICLE` has exactly 23 fields; all nine this mod uses are present
+and correctly named: `state`, `stopIndex`, `doorsOpen`, `doorsTime`,
+`lineStopDepartures`, `timeUntilCloseDoors`, `sectionTimes`, `carrier`, `line`
+(plus `autoDeparture`, which the mod also reads).
+
+`LINE` has exactly three fields — `stops`, `waitingTime`, `vehicleInfo`.
+`Line::Stop` carries `stationGroup`, `minWaitingTime`, `maxWaitingTime`,
+`alternativeTerminals`, `loadMode`, `terminal`, `waypoints`, `stopConfig`.
+
+`api.cmd.make.setVehicleShouldDepart(vehicleEntity)` takes **one** argument.
+This mod passes one. Correct.
+
+## RISK 4 — the time-unit contradiction (UNRESOLVED, do not "fix" blind)
+
+`GAME_TIME.gameTime`, `doorsTime`, `lineStopDepartures[]` and
+`lastLineStopDeparture` are **all `long long`**, and the binary analysis
+concludes they share one time base, with `game.interface.getGameTime().time`
+being that base in seconds (so the native unit is **milliseconds**).
+
+But this mod scales them **inconsistently**, and every downstream calculation
+needs seconds (`% 3600` slot arithmetic):
+
+| value | mod divides by | implies unit |
+| --- | --- | --- |
+| `gameTime` (`timetable_helper.lua:460`) | `1000` | milliseconds |
+| `lineStopDepartures[stop]` (`timetable_helper.lua:162`) | `1000` | milliseconds |
+| `doorsTime` (`timetable.lua:329`, `:590`) | **`1000000`** | **microseconds** |
+
+Both cannot be true if they share a base. Either `doorsTime` really is
+microseconds and the binary analysis over-generalised from the shared C++ type,
+or **this mod is out by a factor of 1000 on every arrival time** — which would
+fit open issue #27, *"Vehicle doesn't depart at correct time"*.
+
+Cross-checking other installed mods was inconclusive: only one other mod reads
+`doorsTime` at all, and it does not scale it.
+
+**Deliberately not changed.** Altering a divisor by 1000× on a static inference,
+in the value that drives every slot decision, is exactly the kind of change that
+needs evidence. **Probe it in-game first** — log `doorsTime`, `gameTime` and
+`lineStopDepartures[stop]` side by side for one vehicle at a terminal and
+compare the magnitudes. That single log line settles it.
+
+## RISK 5 — `load` has a second parameter this mod ignores
+
+The `GameScriptRep` constructor binds `load` as
+`(ctx, lua::Value2 const&, bool)` — i.e. **`load(state, reset)`**. Urban Games'
+own code uses the flag (`res/scripts/guidesystem.lua:1343`):
+
+```lua
+load = function (state, reset)
+    if state == nil or next(state) == nil or reset then return end
+```
+
+This mod declares `load = function(loadedState)` and ignores `reset`, so it will
+adopt state on a reset/new-game when it should discard it. Fix as part of the
+state-sync rework.
+
+## Line frequency: the legacy call has to stay
+
+**There is no `api.engine.*` route to line frequency.** `LINE` has no frequency
+field, `LineVehicleInfo` has exactly two members (`transportModes`,
+`defaultPrice`), and the string `"frequency"` occurs **once** in the whole
+binary, referenced from inside the `game.interface.getEntity` line branch.
+
+So `game.interface.getEntity(line).frequency` is the only published route, and
+it is not deprecated (no deprecation notice exists anywhere in the shipped
+product; "legacy" is only an internal C++ name).
+
+This closes the stage-2 question: the legacy call **cannot** be dropped. The
+S3-1 fix — calling it only for lines that actually use AutoUnbunch — was
+therefore the whole available win, not a stepping stone.
+
+The alternative, if the legacy surface ever has to go: compute headway directly
+from `TransportVehicle.lineStopDepartures` across
+`transportVehicleSystem.getLineVehicles(line)`. That is strictly more
+information than the scalar frequency and is entirely `api.engine.*` — but it is
+a reimplementation, not a substitution.
+
+## Reading components from the GUI thread is sanctioned
+
+`res/scripts/selectortooltip.lua` calls `api.engine.entityExists` and
+`api.engine.getComponent` from inside `guiUpdate`. So the GUI does **not** need
+vehicle data ferried through `save`/`load` — only state the mod owns and wants
+persisted. This simplifies the state-sync design: `vehiclesWaiting` is the
+engine's private bookkeeping, and the GUI can read live vehicle data directly.
+
+`api.engine.getComponent` returns **nil** when the component is absent, which is
+what the S2-5 guards assume.
