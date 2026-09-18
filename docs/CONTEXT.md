@@ -42,34 +42,80 @@ game_script filename (`timetable_gui.lua`) deliberately — that is what lets an
 existing save's timetable data be found. The cost is that the two mods collide
 if both are enabled.
 
-Open question, **not yet verified**: whether TpF2 keys a game_script's saved
-state by mod id (folder name) or by script path. If it is the mod id, then
-renaming the folder to `timetables_plus_1` orphans timetables in an existing
-save. Test with a throwaway save before trusting it.
+**Resolved, with primary evidence.** Saved script state is keyed by the **bare
+game_script filename**, not by mod id or folder name. Verified three ways:
 
-## Lua version — verified, not assumed
+- The wiki: "the game scripts only receive stored data that was saved from a
+  game script file **with the same filename**."
+  <https://wiki.transportfever2.com/doku.php?id=modding:gamescripts>
+- On this machine, `…/local/save/gtnh kab.sav.lua` is plain readable Lua whose
+  top level is keyed by filename — `["timetable_gui.lua"]`, `["autosig2.lua"]`,
+  `["move_it_script.lua"]` — with no mod id, folder name or workshop id
+  anywhere.
+- Those keys map to mods in entirely differently-named folders.
 
-The game embeds **Lua 5.2.2**. Confirmed from the shipped binary, not from any
-mod's assumption:
+Consequences, **inverted from what was feared**:
 
-    $ strings -a "…/Transport Fever 2/TransportFever2" | grep '$LuaVersion'
-    $LuaVersion: Lua 5.2.2  Copyright (C) 1994-2013 Lua.org, PUC-Rio $
+- Renaming the mod folder to `timetables_plus_1` is **safe**; state survives.
+- Renaming or moving `res/config/game_script/timetable_gui.lua` is the real
+  hazard — that orphans every existing save's timetables. Do not rename it.
+- The filename is a **global namespace across all installed mods**. Sharing
+  `timetable_gui.lua` with the Workshop mod is what makes timetables transfer,
+  and is also exactly why both must never be enabled at once.
 
-This machine has lua5.1, lua5.4, lua5.5 and luajit — **no 5.2**. So the test
-suite runs on a newer Lua than the game, and 5.3+ constructs (`//`, `<<`, `>>`,
-bitwise ops, `math.type`, `table.move`, `string.pack`, `<const>`) would pass on
-the host and fail in the game. Upstream's CI has the same blind spot: its
-workflow uses `leafo/gh-actions-lua`, which does not pin 5.2 either.
+## Verified threading contract
 
-Mitigations in place:
+Replaces the guesswork previously inferred from mod comments. Sources:
+<https://wiki.transportfever2.com/api/topics/states.md.html>,
+<https://wiki.transportfever2.com/doku.php?id=modding:gamescripts>, and Urban
+Games' own shipped `res/scripts/mission/taskutil.lua`.
 
-- `tests/lint_tests.lua` scans every shipped file for 5.3+/5.4-only constructs
-  and fails the suite. Verified by injecting `7 // 2` and watching it catch it.
-- `res/scripts/celmi/timetables/ops.lua` binds `table.unpack or unpack` rather
-  than relying on either being present.
+| Fact | Status |
+| --- | --- |
+| Same file, two completely isolated Lua states, no shared variables | confirmed |
+| Engine thread runs `load`, `save`, `update`, `handleEvent` | confirmed |
+| GUI thread runs `load`, `guiInit`, `guiUpdate`, `guiHandleEvent` | confirmed |
+| `save()`→`load()` is the engine→GUI channel | confirmed |
+| GUI `load()` fires **~5×/second**, engine `load()` **once** at savegame load | confirmed — *not* per frame |
+| `update()` runs at **5 Hz "on average"** | confirmed — do not assume a fixed tick |
+| `handleEvent` does **not** fire in the GUI state; no echo to the sender | confirmed structurally from `taskutil.lua`, which would infinite-loop otherwise |
+| An engine-sent event re-entering the engine's own `handleEvent` | **unverified** — make engine handlers idempotent |
 
-Outstanding: installing `lua52` (`extra/lua52` in the Arch repos) would let the
-suite run on the real target version. Not installed — that is a system change
+Two corrections to things the inherited code implies:
+
+- The signature is `game.interface.sendScriptEvent(id, name, param)`. Upstream
+  passes `("timetableUpdate", "", obj)` and matches on `id`, which is correct —
+  but the argument order is worth knowing before touching it.
+- Script events are **broadcast to every game script on the machine**. The id
+  `timetableUpdate` is unnamespaced and can collide with another mod. Urban
+  Games namespaces theirs (`__taskEvent__`); so should we.
+
+**State discriminator:** `game.gui == nil` is true in the engine state and
+false in the GUI state. Urban Games `assert`s on it throughout `taskutil.lua`.
+Use it to make engine-only mutators fail loudly instead of desyncing silently.
+
+**Known API limitation:** a script event must be fired from inside a script
+callback, not from a GUI element's click handler. Upstream's `timetableChanged`
+flag drained in `guiUpdate` is the documented workaround, and is correct.
+
+## What the real save says
+
+`gtnh kab.sav.lua` currently holds 7 line entries / 7 stops of timetable state
+— about 98 lines of Lua. Notable:
+
+- Line ids are stored as **strings** (`["107136"]`), which is why
+  `setTimetableObject` has code to patch them back to numbers.
+- Every stop carries `inboundTime`, a **Celmi-era field that this fork does not
+  know about** — the save was written by the Workshop version. Harmless (the
+  fork never reads it) but it confirms the schema diverged.
+- One stop has `type = "ArrDep"` with an **empty `ArrDep = { }`** — the exact
+  S2-3 case, live in a real save.
+- Two stops have `debounce = { 0, 0 }` — defaults written into the savegame by
+  the display function, S4-2 in the wild.
+
+At this size the cost of shipping the whole object 5×/second is small. The
+whole-object sync is a **correctness** problem, not a performance one; the
+frequency poll (S3-1) was the real performance win.
 and needs asking first.
 ## Tests
 
