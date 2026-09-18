@@ -1210,8 +1210,8 @@ function data()
             for _ = 0, 20 do
                 local coroutineStatus = coroutine.status(co)
                 if coroutineStatus == "suspended" then
-                    local err, msg = coroutine.resume(co)
-                    if not err then print("Timetables coroutine error: " .. tostring(msg)) end
+                    local ok, msg = coroutine.resume(co)
+                    if not ok then print("Timetables coroutine error: " .. tostring(msg)) end
                 else
                     print("Timetables failed to resume " .. coroutineStatus .. " coroutine.")
                 end
@@ -1244,8 +1244,8 @@ function data()
 
                 local button = gui.button_create("gameInfo.timetables.button", buttonLabel)
                 button:onClick(function ()
-                    local err, msg = pcall(timetableGUI.showLineMenu)
-                    if not err then
+                    local ok, msg = pcall(timetableGUI.showLineMenu)
+                    if not ok then
                         menu.window = nil
                         print(msg)
                     end

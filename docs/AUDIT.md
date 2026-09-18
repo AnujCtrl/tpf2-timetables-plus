@@ -249,3 +249,55 @@ parameter.
   measurement**. Time them in-game before optimising.
 - Whether saved script state is keyed by mod id or script path (see
   `docs/CONTEXT.md`).
+
+---
+
+# Resolution status — updated 2026-09-18
+
+Stage 1 (correctness) complete. Every fix had a test watched failing first.
+
+| Finding | Status | Test |
+| --- | --- | --- |
+| S1-1 force departure dead code | fixed | `timetable_tests` #16 |
+| S2-1 whole-object sync race | **open** — stage 3 | — |
+| S2-2 scans one arbitrary vehicle | fixed | `timetable_tests` #17 |
+| S2-3 `slots == {}` never fires | fixed | `timetable_tests` #19 |
+| S2-4 read path reorders saved slots | fixed | `timetable_tests` #18 |
+| S2-5 nil crash paths | fixed (3 sites) | `helper_tests` #1–3, `timetable_tests` #20, #21 |
+| S2-6 truthy `-1` / `"ERROR"` returns | fixed (3 fns) | `helper_tests` #5, #6 |
+| S3-1 per-tick all-lines poll | **open** — stage 2 | — |
+| S3-2 `cleanTimetable` O(n²), dead | **open** — stage 2 | — |
+| S4-1 coroutine driver | **deferred to stage 3** | — |
+| S4-2 display fn mutates state | fixed (2 sites) | `helper_tests` #7, `timetable_tests` #22 |
+| S4-3 `pcall` result named `err` | fixed | covered by existing |
+| S4-4 shadowed `sec` local | fixed | covered by existing |
+
+## Why S4-1 is deferred rather than fixed
+
+The coroutine driver lives in `res/config/game_script/timetable_gui.lua`, inside
+the closure returned by `data()`. That file is not requireable from a test — it
+pulls in the `gui` module and builds live API widgets at load. Fixing the driver
+now would mean production code with no test behind it.
+
+Stage 3 restructures this file anyway. The driver moves to a requireable module
+under `res/scripts/celmi/timetables/`, where it can be tested, and gets fixed
+there.
+
+## S2-5, on moving a crash rather than removing one
+
+Guarding `getPreviousDepartureTime` made it reliably return `nil` where it
+previously crashed — which relocated the crash into its two callers, and a test
+caught exactly that. A third nil path surfaced in the same area:
+`autoDebounceDepartureTime` returned `nil` for a line with no frequency, which
+reached `nil <= number` in `afterDepartureTime`.
+
+All three now release the vehicle. Releasing was chosen over holding: without a
+previous departure or a frequency there is no spacing information to act on, and
+the failure mode of holding is a vehicle frozen at a platform indefinitely.
+
+## Characterization test
+
+`helper_tests` #4 (`maximumArray` returns `nil` for an empty array) passed on
+the first run — it is a characterization test, not a driven one. It exists to
+lock the contract the caller guards now depend on, so that "fixing"
+`maximumArray` to return `0` cannot silently change unbunching behaviour.

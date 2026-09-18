@@ -205,7 +205,7 @@ end
 -- returns Bool
 function timetableHelper.lineHasType(line, lineType)
     if type(line) == "string" then line = tonumber(line) end
-    if not(type(line) == "number") then print("Expected String or Number") return -1 end
+    if not(type(line) == "number") then print("Expected String or Number") return false end
 
     local vehicles = api.engine.system.transportVehicleSystem.getLineVehicles(line)
     if vehicles and vehicles[1] then
@@ -245,11 +245,11 @@ function timetableHelper.getLineName(line)
     if type(line) == "string" then line = tonumber(line) end
     if not(type(line) == "number") then return "ERROR" end
 
-    local err, res = pcall(function()
+    local ok, res = pcall(function()
         return api.engine.getComponent(line, api.type.ComponentType.NAME)
     end)
     local component = res
-    if err and component and component.name then
+    if ok and component and component.name then
         return component.name
     else
         return "ERROR"
@@ -321,7 +321,7 @@ end
 -- returns [time: Number] Array indexed by station index in sec starting with index 1
 function timetableHelper.getLegTimes(line)
     if type(line) == "string" then line = tonumber(line) end
-    if not(type(line) == "number") then return "ERROR" end
+    if not(type(line) == "number") then return {} end
     local vehicleLineMap = api.engine.system.transportVehicleSystem.getLine2VehicleMap()
     if vehicleLineMap[line] == nil or vehicleLineMap[line][1] == nil then return {}end
     local vehicle = vehicleLineMap[line][1]
@@ -359,7 +359,7 @@ end
 -- returns [id : Number] Array of stationIds
 function timetableHelper.getAllStations(line)
     if type(line) == "string" then line = tonumber(line) end
-    if not(type(line) == "number") then return "ERROR" end
+    if not(type(line) == "number") then return {} end
 
     local lineObject = api.engine.getComponent(line, api.type.ComponentType.LINE)
     if lineObject and lineObject.stops then
@@ -379,10 +379,10 @@ function timetableHelper.getStationName(station)
     if type(station) == "string" then station = tonumber(station) end
     if not(type(station) == "number") then return "ERROR" end
 
-    local err, res = pcall(function()
+    local ok, res = pcall(function()
         return api.engine.getComponent(station, api.type.ComponentType.NAME)
     end)
-    if err and res then return res.name else return "ERROR" end
+    if ok and res then return res.name else return "ERROR" end
 end
 
 
@@ -511,14 +511,16 @@ function timetableHelper.conditionToString(cond, lineID, type)
         local res = arr .. "\n"  .. dep
         return res
     elseif type == "debounce" then
-        if not cond[1] then cond[1] = 0 end
-        if not cond[2] then cond[2] = 0 end
-        return UIStrings.unbunchTime .. ": " .. string.format("%02d", cond[1]) .. ":" .. string.format("%02d", cond[2])
+        -- Read defaults into locals; this renders a label and must not write
+        -- back into the persisted condition table.
+        local min = cond[1] or 0
+        local sec = cond[2] or 0
+        return UIStrings.unbunchTime .. ": " .. string.format("%02d", min) .. ":" .. string.format("%02d", sec)
     elseif type == "auto_debounce" then
-        if not cond[1] then cond[1] = 0 end
-        if not cond[2] then cond[2] = 0 end
-        local margin = "Margin Time:  " .. string.format("%02d", cond[1]) .. ":" .. string.format("%02d", cond[2])
-        local unbunch = timetableHelper.getAutoUnbunchFor(lineID, cond)
+        local min = cond[1] or 0
+        local sec = cond[2] or 0
+        local margin = "Margin Time:  " .. string.format("%02d", min) .. ":" .. string.format("%02d", sec)
+        local unbunch = timetableHelper.getAutoUnbunchFor(lineID, {min, sec})
         return margin .. "\n" .. unbunch
     else
         return type

@@ -678,6 +678,28 @@ timetableTests[#timetableTests + 1] = function()
 
     assert(ready == true, "auto unbunch on a line with no frequency should release the vehicle")
 end
+
+-- S4-2: computing a departure time must not write default values back into
+-- the persisted condition table.
+timetableTests[#timetableTests + 1] = function()
+    timetable.setTimetableObject({
+        [1] = {
+            hasTimetable = true,
+            frequency = 600,
+            stations = {[1] = {stationID = 1, conditions = {type = "debounce", debounce = {}}}}
+        }
+    })
+    mockTimetableHelper.getPreviousDepartureTime = function() return 50 end
+    mockTimetableHelper.getLineInfo = function()
+        return {stops = {[1] = {minWaitingTime = 0, maxWaitingTime = 0}}}
+    end
+
+    timetable.manualDebounceDepartureTime(100, {1}, 100, 1, 1, {})
+
+    local cond = timetable.getConditions(1, 1, "debounce")
+    assert(cond[1] == nil and cond[2] == nil,
+        "computing a departure must not write defaults into the condition")
+end
 return {
     test = function()
         for k,v in pairs(timetableTests) do

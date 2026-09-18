@@ -521,10 +521,10 @@ function timetable.manualDebounceDepartureTime(arrivalTime, vehicles, time, line
     end
     local condition = timetable.getConditions(line, stop, "debounce")
     if condition == -1 then condition = {0, 0} end
-    if not condition[1] then condition[1] = 0 end
-    if not condition[2] then condition[2] = 0 end
+    -- Read defaults into locals; `condition` is persisted state.
+    local condMin, condSec = condition[1] or 0, condition[2] or 0
 
-    local unbunchTime = timetable.minToSec(condition[1], condition[2])
+    local unbunchTime = timetable.minToSec(condMin, condSec)
     local nextDepartureTime = previousDepartureTime + unbunchTime
     local waitTime = nextDepartureTime - arrivalTime
     return timetable.getDepartureTime(line, stop, arrivalTime, waitTime)
@@ -546,10 +546,10 @@ function timetable.autoDebounceDepartureTime(arrivalTime, vehicles, time, line, 
 
     local condition = timetable.getConditions(line, stop, "auto_debounce")
     if condition == -1 then condition = {1, 0} end
-    if not condition[1] then condition[1] = 1 end
-    if not condition[2] then condition[2] = 0 end
+    -- Read defaults into locals; `condition` is persisted state.
+    local condMin, condSec = condition[1] or 1, condition[2] or 0
 
-    local marginTime = timetable.minToSec(condition[1], condition[2])
+    local marginTime = timetable.minToSec(condMin, condSec)
     local nextDepartureTime = previousDepartureTime + frequency - marginTime
     local waitTime = nextDepartureTime - arrivalTime
     return timetable.getDepartureTime(line, stop, arrivalTime, waitTime)
@@ -754,9 +754,9 @@ function timetable.minToSec(min, sec)
     return min * 60 + sec
 end
 
-function timetable.secToMin(sec)
-    local min = math.floor(sec / 60) % 60
-    local sec = math.floor(sec % 60)
+function timetable.secToMin(totalSec)
+    local min = math.floor(totalSec / 60) % 60
+    local sec = math.floor(totalSec % 60)
     return min, sec
 end
 

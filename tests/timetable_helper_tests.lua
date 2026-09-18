@@ -44,6 +44,46 @@ tests[#tests + 1] = function()
     assert(timetableHelper.maximumArray({3, 9, 4}) == 9, "max of {3,9,4} is 9")
 end
 
+
+-- S2-6: helpers documented as returning an array must return an array on the
+-- error path too. getAllStations returned the string "ERROR", and its caller
+-- in timetable_gui.lua does pairs() on the result, which throws on a string.
+tests[#tests + 1] = function()
+    fakeApi.install()
+
+    local stations = timetableHelper.getAllStations({})
+    assert(type(stations) == "table", "getAllStations must return a table on the error path")
+    for _ in pairs(stations) do end  -- must not throw
+
+    local legTimes = timetableHelper.getLegTimes({})
+    assert(type(legTimes) == "table", "getLegTimes must return a table on the error path")
+    for _ in pairs(legTimes) do end  -- must not throw
+end
+
+-- S2-6: helpers documented as returning Bool must not return -1, which is
+-- truthy in Lua and so reads as "yes" at every call site.
+tests[#tests + 1] = function()
+    fakeApi.install()
+
+    assert(timetableHelper.lineHasType({}, "RAIL") == false,
+        "lineHasType must return false, not a truthy -1, on the error path")
+end
+
+-- S4-2: conditionToString renders a label. It must not write default values
+-- back into the condition table, which is persisted state.
+tests[#tests + 1] = function()
+    fakeApi.install()
+
+    local cond = {}
+    timetableHelper.conditionToString(cond, 1, "debounce")
+    assert(cond[1] == nil and cond[2] == nil,
+        "rendering a debounce label must not mutate the condition")
+
+    local autoCond = {}
+    timetableHelper.conditionToString(autoCond, 1, "auto_debounce")
+    assert(autoCond[1] == nil and autoCond[2] == nil,
+        "rendering an auto_debounce label must not mutate the condition")
+end
 return {
     test = function()
         for k, v in pairs(tests) do
