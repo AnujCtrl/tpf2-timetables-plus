@@ -2,6 +2,7 @@ local timetableTests = require "tests.timetable_tests"
 local timetableHelperTests = require "tests.timetable_helper_tests"
 local opsTests = require "tests.ops_tests"
 local lintTests = require "tests.lint_tests"
+local probeTests = require "tests.probe_tests"
 
 
 print("running timetable tests")
@@ -15,3 +16,6 @@ opsTests.test()
 
 print("running lint tests")
 lintTests.test()
+
+print("running probe tests")
+probeTests.test()

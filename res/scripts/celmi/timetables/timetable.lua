@@ -1,5 +1,6 @@
 local timetableHelper = require "celmi/timetables/timetable_helper"
 local guard = require "celmi/timetables/guard"
+local probe = require "celmi/timetables/probe"
 
 --[[
 timetable = {
@@ -326,6 +327,24 @@ function timetable.departIfReady(vehicle, vehicleInfo, vehicles, line, stop)
     if vehicleInfo.autoDeparture then
         timetableHelper.stopAutoVehicleDeparture(vehicle)
     elseif vehicleInfo.doorsOpen then
+        -- Diagnostic; see docs/API_FACTS.md RISK 4 and RISK 1. Bounded, and
+        -- logs once per arrival rather than once per 5 Hz tick.
+        if probe.shouldLog(vehicle, stop) then
+            local probeLineInfo = timetableHelper.getLineInfo(line)
+            local probeStopInfo = probeLineInfo and probeLineInfo.stops
+                and probeLineInfo.stops[stop]
+            print(probe.format({
+                vehicle = vehicle,
+                line = line,
+                stop = stop,
+                gameTime = timetableHelper.getRawGameTime(),
+                doorsTime = vehicleInfo.doorsTime,
+                lineStopDeparture = vehicleInfo.lineStopDepartures
+                    and vehicleInfo.lineStopDepartures[stop],
+                minWaitingTime = probeStopInfo and probeStopInfo.minWaitingTime,
+                maxWaitingTime = probeStopInfo and probeStopInfo.maxWaitingTime,
+            }))
+        end
         local arrivalTime = math.floor(vehicleInfo.doorsTime / 1000000)
         if timetable.readyToDepart(vehicle, arrivalTime, vehicles, line, stop) then
             if timetable.getForceDepartureEnabled(line) then

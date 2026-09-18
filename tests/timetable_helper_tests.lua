@@ -84,6 +84,18 @@ tests[#tests + 1] = function()
     assert(autoCond[1] == nil and autoCond[2] == nil,
         "rendering an auto_debounce label must not mutate the condition")
 end
+
+-- The probe compares raw magnitudes, so it needs game time unscaled.
+-- getTime() divides by 1000, which is the very convention under question.
+tests[#tests + 1] = function()
+    fakeApi.install()
+    fakeApi.setComponent("world", "GAME_TIME", {gameTime = 3600123})
+
+    assert(timetableHelper.getRawGameTime() == 3600123,
+        "raw game time must not be scaled")
+    assert(timetableHelper.getTime() == 3600,
+        "getTime still returns seconds")
+end
 return {
     test = function()
         for k, v in pairs(tests) do

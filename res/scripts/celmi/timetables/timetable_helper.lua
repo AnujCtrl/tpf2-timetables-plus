@@ -456,6 +456,17 @@ end
 
 
 -- returns Number, current GameTime in seconds
+-- Game time exactly as the engine stores it, unscaled. GAME_TIME.gameTime is
+-- a long long; getTime() below divides it by 1000 to get seconds, and whether
+-- that convention matches doorsTime is the open question in docs/API_FACTS.md.
+-- Returns 0 when the component is missing.
+function timetableHelper.getRawGameTime()
+    local gameTime = api.engine.getComponent(
+        api.engine.util.getWorld(), api.type.ComponentType.GAME_TIME)
+    if gameTime and gameTime.gameTime then return gameTime.gameTime end
+    return 0
+end
+
 function timetableHelper.getTime()
     local time = api.engine.getComponent(api.engine.util.getWorld(), api.type.ComponentType.GAME_TIME).gameTime
     if time then

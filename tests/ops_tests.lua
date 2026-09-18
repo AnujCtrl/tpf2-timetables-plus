@@ -4,6 +4,10 @@ package.loaded["celmi/timetables/timetable_helper"] = mockTimetableHelper
 local guard = require ".res.scripts.celmi.timetables.guard"
 package.loaded["celmi/timetables/guard"] = guard
 
+local probe = require ".res.scripts.celmi.timetables.probe"
+package.loaded["celmi/timetables/probe"] = probe
+probe.reset(0)  -- silence the diagnostic in tests
+
 local timetable = require ".res.scripts.celmi.timetables.timetable"
 package.loaded["celmi/timetables/timetable"] = timetable
 

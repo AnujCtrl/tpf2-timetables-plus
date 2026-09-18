@@ -8,17 +8,26 @@ This lint pins the shipped code to what 5.2 actually provides. It scans only
 the files install.sh ships, not the tests.
 --]]
 
-local shipped = {
-    "res/config/game_script/timetable_gui.lua",
-    "res/config/style_sheet/timetable_colors.lua",
-    "res/config/style_sheet/timetable_stylesheet.lua",
-    "res/scripts/celmi/timetables/guard.lua",
-    "res/scripts/celmi/timetables/ops.lua",
-    "res/scripts/celmi/timetables/timetable.lua",
-    "res/scripts/celmi/timetables/timetable_helper.lua",
-    "mod.lua",
-    "strings.lua",
-}
+-- Discover the shipped files rather than listing them. A hardcoded list goes
+-- stale the moment a module is added, which is exactly how probe.lua slipped
+-- past this lint once already.
+--
+-- This mirrors install.sh's payload: mod.lua, strings.lua and everything
+-- under res/.
+local function shippedFiles()
+    local found = {}
+    local pipe = assert(io.popen("find res -name '*.lua' -type f 2>/dev/null"))
+    for path in pipe:lines() do
+        found[#found + 1] = path
+    end
+    pipe:close()
+    found[#found + 1] = "mod.lua"
+    found[#found + 1] = "strings.lua"
+    table.sort(found)
+    return found
+end
+
+local shipped = shippedFiles()
 
 -- pattern, what it is, which Lua version introduced it
 local banned = {
@@ -68,6 +77,9 @@ tests[#tests + 1] = function()
         file:close()
     end
 
+
+    -- Discovery must actually find something, or this lint silently passes.
+    assert(#shipped >= 8, "expected to discover the shipped lua files, found " .. #shipped)
     assert(#violations == 0,
         "Lua 5.2 compatibility violations:\n  " .. table.concat(violations, "\n  "))
 end
