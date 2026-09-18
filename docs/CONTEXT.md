@@ -47,6 +47,30 @@ state by mod id (folder name) or by script path. If it is the mod id, then
 renaming the folder to `timetables_plus_1` orphans timetables in an existing
 save. Test with a throwaway save before trusting it.
 
+## Lua version — verified, not assumed
+
+The game embeds **Lua 5.2.2**. Confirmed from the shipped binary, not from any
+mod's assumption:
+
+    $ strings -a "…/Transport Fever 2/TransportFever2" | grep '$LuaVersion'
+    $LuaVersion: Lua 5.2.2  Copyright (C) 1994-2013 Lua.org, PUC-Rio $
+
+This machine has lua5.1, lua5.4, lua5.5 and luajit — **no 5.2**. So the test
+suite runs on a newer Lua than the game, and 5.3+ constructs (`//`, `<<`, `>>`,
+bitwise ops, `math.type`, `table.move`, `string.pack`, `<const>`) would pass on
+the host and fail in the game. Upstream's CI has the same blind spot: its
+workflow uses `leafo/gh-actions-lua`, which does not pin 5.2 either.
+
+Mitigations in place:
+
+- `tests/lint_tests.lua` scans every shipped file for 5.3+/5.4-only constructs
+  and fails the suite. Verified by injecting `7 // 2` and watching it catch it.
+- `res/scripts/celmi/timetables/ops.lua` binds `table.unpack or unpack` rather
+  than relying on either being present.
+
+Outstanding: installing `lua52` (`extra/lua52` in the Arch repos) would let the
+suite run on the real target version. Not installed — that is a system change
+and needs asking first.
 ## Tests
 
     lua5.4 tests/main_tests.lua
