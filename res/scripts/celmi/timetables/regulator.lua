@@ -135,4 +135,136 @@ function regulator.requiredMaxWait(arrivalTime, plannedDeparture, maxWait)
     if maxWait and wait > maxWait then return wait end
     return nil
 end
+
+---Decide what to do with a vehicle sitting at the regulation stop.
+---
+---The whole engine-side decision, kept pure so that the glue inside the
+---game_script stays thin enough not to need a test it cannot have.
+---@param now number current game time, seconds
+---@param arrivalTime number when this vehicle's doors opened, seconds
+---@param lastDeparture number|nil when the previous vehicle left this stop
+---@param headway number|nil target spacing, seconds
+---@param minWait number|nil the stop's own minimum waiting time
+---@param maxWait number|nil the stop's own maximum waiting time
+---@return string action "hold" or "depart"
+---@return number departAt the time it should leave
+function regulator.decide(now, arrivalTime, lastDeparture, headway, minWait, maxWait)
+    local planned = regulator.plannedDeparture(lastDeparture, headway, arrivalTime)
+    local departAt = regulator.clampToStop(arrivalTime, planned, minWait, maxWait)
+
+    if now >= departAt then return "depart", departAt end
+    return "hold", departAt
+end
+
+
+---The vehicles currently being held, excluding one.
+---
+---A vehicle must never space itself against its own planned departure: doing
+---so pushes its own deadline out by a headway on every tick, and it never
+---leaves the platform.
+---@param waiting table|nil vehicle -> {departureTime = number}
+---@param vehicle number the one to leave out
+---@return table
+function regulator.otherWaiting(waiting, vehicle)
+    local others = { }
+    if type(waiting) ~= "table" then return others end
+
+    for heldVehicle, entry in pairs(waiting) do
+        if heldVehicle ~= vehicle then others[heldVehicle] = entry end
+    end
+
+    return others
+end
+-------------------------------------------------------------
+---------------------- State --------------------------------
+-------------------------------------------------------------
+
+local regulationState = { }
+
+function regulator.getState()
+    return regulationState
+end
+
+function regulator.setState(newState)
+    if type(newState) == "table" then regulationState = newState end
+end
+
+local function lineEntry(line)
+    if not regulationState[line] then
+        regulationState[line] = {enabled = false, stop = 1, waiting = { }}
+    end
+    return regulationState[line]
+end
+
+---@param line number
+---@return boolean
+function regulator.isEnabled(line)
+    local entry = regulationState[line]
+    return (entry ~= nil) and (entry.enabled == true)
+end
+
+---@param line number
+---@param enabled boolean
+function regulator.setEnabled(line, enabled)
+    lineEntry(line).enabled = (enabled == true)
+end
+
+---Which stop regulates this line. Stop 1 unless moved.
+---@param line number
+---@return number
+function regulator.getStop(line)
+    local entry = regulationState[line]
+    if entry and entry.stop then return entry.stop end
+    return 1
+end
+
+---@param line number
+---@param stop number
+function regulator.setStop(line, stop)
+    lineEntry(line).stop = stop
+end
+
+-------------------------------------------------------------
+------------------- Per-field ownership ----------------------
+-------------------------------------------------------------
+-- GUI owns    enabled, stop
+-- engine owns waiting (planned departures of vehicles it is holding)
+--
+-- Carried over from the state-sync rework; see docs/AUDIT.md S2-1. Each
+-- direction copies only what the caller owns, so neither can discard the
+-- other's concurrent work.
+
+---@param into table the GUI's copy
+---@param from table the engine's snapshot
+function regulator.adoptEngineState(into, from)
+    if type(into) ~= "table" or type(from) ~= "table" then return end
+
+    for line, fromLine in pairs(from) do
+        local intoLine = into[line]
+        if type(intoLine) == "table" and type(fromLine) == "table" then
+            intoLine.waiting = fromLine.waiting
+        end
+    end
+end
+
+---@param into table the engine's copy
+---@param from table the GUI's blob
+function regulator.adoptGuiConfig(into, from)
+    if type(into) ~= "table" or type(from) ~= "table" then return end
+
+    for line, fromLine in pairs(from) do
+        local intoLine = into[line]
+        if type(intoLine) ~= "table" or type(fromLine) ~= "table" then
+            into[line] = fromLine
+        else
+            intoLine.enabled = fromLine.enabled
+            intoLine.stop = fromLine.stop
+            -- waiting is the engine's: deliberately not copied.
+        end
+    end
+
+    for line in pairs(into) do
+        if from[line] == nil then into[line] = nil end
+    end
+end
 return regulator

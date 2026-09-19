@@ -79,7 +79,10 @@ tests[#tests + 1] = function()
 
 
     -- Discovery must actually find something, or this lint silently passes.
-    assert(#shipped >= 8, "expected to discover the shipped lua files, found " .. #shipped)
+    -- Guards against discovery silently returning nothing, not against the
+    -- file count changing. mod.lua, strings.lua, the game_script and at least
+    -- one module always exist.
+    assert(#shipped >= 4, "discovery found no shipped lua files (got " .. #shipped .. ")")
     assert(#violations == 0,
         "Lua 5.2 compatibility violations:\n  " .. table.concat(violations, "\n  "))
 end

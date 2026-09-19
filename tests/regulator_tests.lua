@@ -152,6 +152,138 @@ tests[#tests + 1] = function()
     assert(regulator.requiredMaxWait(1000, 1100, 180) == nil,
         "a hold inside the existing ceiling needs no change")
 end
+
+-- The whole engine-side decision in one pure function, so the glue in the
+-- game_script stays thin enough not to need a test it cannot have.
+tests[#tests + 1] = function()
+    local headway = 600
+    local margin = regulator.marginFor(headway)
+    local plannedGap = headway - margin   -- 540
+
+    -- Arrived at 1100, previous vehicle left at 1000, now is 1100.
+    -- Planned departure is 1540, so hold.
+    local action, departAt = regulator.decide(1100, 1100, 1000, headway, nil, nil)
+    assert(action == "hold", "too soon after the previous vehicle: hold")
+    assert(departAt == 1000 + plannedGap, "and this is when it may leave")
+
+    -- Same vehicle, later: now past the planned time.
+    action = regulator.decide(1600, 1100, 1000, headway, nil, nil)
+    assert(action == "depart", "past the planned departure: go")
+end
+
+-- The stop's ceiling wins, and the decision reflects that rather than
+-- planning a hold the game will cancel.
+tests[#tests + 1] = function()
+    -- Wants to hold 540s; the stop allows 180s.
+    local action, departAt = regulator.decide(1290, 1100, 1000, 600, 0, 180)
+    assert(action == "depart", "the stop's ceiling releases the vehicle")
+    assert(departAt == 1100 + 180, "cut to the stop's maximum wait")
+end
+
+-- A line that cannot be regulated releases immediately, in every case.
+tests[#tests + 1] = function()
+    assert(regulator.decide(1100, 1100, nil, 600, nil, nil) == "depart",
+        "no previous departure")
+    assert(regulator.decide(1100, 1100, 1000, nil, nil, nil) == "depart",
+        "no headway")
+    assert(regulator.decide(1100, 1100, 1000, 0, nil, nil) == "depart",
+        "zero headway")
+end
+
+-- The stop's minimum is honoured even when regulation wants an early release.
+tests[#tests + 1] = function()
+    local action, departAt = regulator.decide(1105, 1100, nil, 600, 30, 180)
+    assert(action == "hold", "the stop's own minimum still holds the vehicle")
+    assert(departAt == 1130, "until the minimum has elapsed")
+end
+
+-- Config accessors. Defaults must be safe for a line nobody has configured:
+-- not regulated, and regulating at stop 1 if it ever is.
+tests[#tests + 1] = function()
+    regulator.setState({})
+
+    assert(regulator.isEnabled(42) == false, "an unknown line is not regulated")
+    assert(regulator.getStop(42) == 1, "and would regulate at stop 1")
+
+    regulator.setEnabled(42, true)
+    assert(regulator.isEnabled(42) == true, "enabling sticks")
+    assert(regulator.getStop(42) == 1, "still stop 1 by default")
+
+    regulator.setStop(42, 3)
+    assert(regulator.getStop(42) == 3, "the regulation stop can be moved")
+
+    regulator.setEnabled(42, false)
+    assert(regulator.isEnabled(42) == false, "disabling sticks")
+    assert(regulator.getStop(42) == 3, "and does not forget which stop")
+end
+
+-- Per-field ownership, carried over from the state-sync rework. The field
+-- lists are smaller now: the GUI owns enabled and stop, the engine owns the
+-- planned departures of vehicles it is currently holding.
+tests[#tests + 1] = function()
+    local guiCopy = {
+        [1] = {enabled = true, stop = 2, waiting = {["9"] = 100}},
+    }
+    local engineSnapshot = {
+        [1] = {enabled = false, stop = 99, waiting = {["7"] = 500}},
+    }
+
+    regulator.adoptEngineState(guiCopy, engineSnapshot)
+
+    assert(guiCopy[1].enabled == true, "GUI keeps its own enabled")
+    assert(guiCopy[1].stop == 2, "GUI keeps its own regulation stop")
+    assert(guiCopy[1].waiting["7"] == 500, "GUI takes the engine's held vehicles")
+    assert(guiCopy[1].waiting["9"] == nil, "and drops its stale copy")
+end
+
+tests[#tests + 1] = function()
+    local engineCopy = {
+        [1] = {enabled = false, stop = 99, waiting = {["7"] = 500}},
+    }
+    local guiBlob = {
+        [1] = {enabled = true, stop = 2, waiting = {}},
+    }
+
+    regulator.adoptGuiConfig(engineCopy, guiBlob)
+
+    assert(engineCopy[1].enabled == true, "engine takes the GUI's enabled")
+    assert(engineCopy[1].stop == 2, "engine takes the GUI's regulation stop")
+    assert(engineCopy[1].waiting["7"] == 500,
+        "engine keeps the vehicles it is holding - this is the lost update")
+end
+
+-- A line the player deleted must not linger.
+tests[#tests + 1] = function()
+    local engineCopy = {[1] = {enabled = true, stop = 1}, [2] = {enabled = true, stop = 1}}
+
+    regulator.adoptGuiConfig(engineCopy, {[1] = {enabled = true, stop = 1}})
+
+    assert(engineCopy[2] == nil, "a line removed in the GUI is removed on the engine")
+end
+
+-- A held vehicle must not space itself against its own planned departure.
+-- If it did, every tick would push its own deadline further out by a headway
+-- and it would never leave the platform.
+tests[#tests + 1] = function()
+    local waiting = {
+        [11] = {departureTime = 500},
+        [22] = {departureTime = 700},
+    }
+
+    local others = regulator.otherWaiting(waiting, 11)
+
+    assert(others[11] == nil, "the vehicle being decided is excluded")
+    assert(others[22] ~= nil, "other held vehicles still count")
+    assert(others[22].departureTime == 700, "with their planned times intact")
+
+    -- The original is untouched; this is a read path.
+    assert(waiting[11] ~= nil, "the caller's table is not mutated")
+end
+
+tests[#tests + 1] = function()
+    assert(next(regulator.otherWaiting({}, 1)) == nil, "nothing waiting is nothing")
+    assert(next(regulator.otherWaiting(nil, 1)) == nil, "nil is nothing")
+end
 return {
     test = function()
         for k, v in pairs(tests) do
