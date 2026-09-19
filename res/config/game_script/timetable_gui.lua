@@ -77,7 +77,8 @@ local function regulateLine(line, vehicles)
 
     entry.waiting = entry.waiting or { }
 
-    local stop = entry.stop or 1
+    local stations = timetableHelper.getAllStations(line)
+    local stop = regulator.resolveStop(stations, entry)
     local headway = headwayFor(line)
     local now = timetableHelper.getTime()
     local stopInfo = stopConfigFor(line, stop)
@@ -188,7 +189,9 @@ local function statusTextFor(line)
         return "Vehicles run without interval regulation."
     end
     return string.format("Evening out at %s, every %s.",
-        stopNameFor(line, regulator.getStop(line)), headwayText(line))
+        stopNameFor(line, regulator.resolveStop(
+            timetableHelper.getAllStations(line), regulator.getState()[line])),
+        headwayText(line))
 end
 
 ---The control appended to the game's own line window.
@@ -212,6 +215,13 @@ local function buildRegulatorRow(line)
     checkbox:onClick(function()
         local nowEnabled = not regulator.isEnabled(line)
         regulator.setEnabled(line, nowEnabled)
+        if nowEnabled then
+            -- Pin the regulation point to a station id so that inserting a
+            -- station before it does not silently move regulation elsewhere.
+            local stations = timetableHelper.getAllStations(line)
+            local resolved = regulator.resolveStop(stations, regulator.getState()[line])
+            regulator.setStation(line, stations and stations[resolved])
+        end
         checkboxImage:setImage(nowEnabled and "ui/checkbox1.tga" or "ui/checkbox0.tga", false)
         status:setText(statusTextFor(line))
         -- Drained in guiUpdate: a script event cannot be fired from inside a

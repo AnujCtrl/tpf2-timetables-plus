@@ -18,6 +18,31 @@ docs/superpowers/specs/2026-09-19-interval-regulator-design.md.
 
 local regulator = { }
 
+
+---Which stop index currently regulates this line.
+---
+---The regulation point is stored as a station group id, not as a position in
+---the stop list, because inserting a station before it shifts every later
+---index and would silently move regulation to a different station. Falls back
+---to the first stop when the station is gone, so a deleted station degrades
+---to "regulate somewhere" rather than to "regulate nowhere, quietly".
+---@param stations table|nil stop index -> station group id
+---@param entry table|nil the line's regulation entry
+---@return number stop index
+function regulator.resolveStop(stations, entry)
+    if type(stations) ~= "table" or type(entry) ~= "table" then return 1 end
+
+    if entry.station then
+        for stopNr, stationGroup in pairs(stations) do
+            if stationGroup == entry.station then return stopNr end
+        end
+    end
+
+    -- Older entries, and anything migrated from a save with no station id.
+    if entry.stop and stations[entry.stop] then return entry.stop end
+
+    return 1
+end
 -- The old condition types that were doing interval regulation by another name.
 local UNBUNCHING_TYPES = {
     debounce = true,
@@ -57,9 +82,16 @@ function regulator.migrate(old)
 
             local enabled = (oldLine.hasTimetable == true) and (regulationStop ~= nil)
 
+            local regulationStation = nil
+            if regulationStop then
+                local stopInfo = (oldLine.stations or { })[regulationStop]
+                regulationStation = type(stopInfo) == "table" and stopInfo.stationID or nil
+            end
+
             migrated[lineID] = {
                 enabled = enabled,
                 stop = regulationStop or 1,
+                station = regulationStation,
                 waiting = { },
             }
         end
@@ -224,10 +256,17 @@ function regulator.setStop(line, stop)
     lineEntry(line).stop = stop
 end
 
+---Remember which station regulates this line, by id rather than position.
+---@param line number
+---@param stationGroup number|nil
+function regulator.setStation(line, stationGroup)
+    lineEntry(line).station = stationGroup
+end
+
 -------------------------------------------------------------
 ------------------- Per-field ownership ----------------------
 -------------------------------------------------------------
--- GUI owns    enabled, stop
+-- GUI owns    enabled, stop, station
 -- engine owns waiting (planned departures of vehicles it is holding)
 --
 -- Carried over from the state-sync rework; see docs/AUDIT.md S2-1. Each
@@ -259,6 +298,7 @@ function regulator.adoptGuiConfig(into, from)
         else
             intoLine.enabled = fromLine.enabled
             intoLine.stop = fromLine.stop
+            intoLine.station = fromLine.station
             -- waiting is the engine's: deliberately not copied.
         end
     end

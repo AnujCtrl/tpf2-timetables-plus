@@ -215,6 +215,10 @@ tests[#tests + 1] = function()
     regulator.setEnabled(42, false)
     assert(regulator.isEnabled(42) == false, "disabling sticks")
     assert(regulator.getStop(42) == 3, "and does not forget which stop")
+
+    regulator.setStation(42, 9876)
+    assert(regulator.getState()[42].station == 9876,
+        "the regulating station is remembered by id, not by position")
 end
 
 -- Per-field ownership, carried over from the state-sync rework. The field
@@ -241,13 +245,15 @@ tests[#tests + 1] = function()
         [1] = {enabled = false, stop = 99, waiting = {["7"] = 500}},
     }
     local guiBlob = {
-        [1] = {enabled = true, stop = 2, waiting = {}},
+        [1] = {enabled = true, stop = 2, station = 4242, waiting = {}},
     }
 
     regulator.adoptGuiConfig(engineCopy, guiBlob)
 
     assert(engineCopy[1].enabled == true, "engine takes the GUI's enabled")
     assert(engineCopy[1].stop == 2, "engine takes the GUI's regulation stop")
+    assert(engineCopy[1].station == 4242,
+        "engine takes the GUI's regulating station - without this the engine\n         never learns where to regulate")
     assert(engineCopy[1].waiting["7"] == 500,
         "engine keeps the vehicles it is holding - this is the lost update")
 end
@@ -283,6 +289,56 @@ end
 tests[#tests + 1] = function()
     assert(next(regulator.otherWaiting({}, 1)) == nil, "nothing waiting is nothing")
     assert(next(regulator.otherWaiting(nil, 1)) == nil, "nil is nothing")
+end
+
+-- The regulation point is stored as a station, not a position in the list.
+-- Inserting a station before it shifts every later index, which would move
+-- regulation to a different station without anyone touching it.
+tests[#tests + 1] = function()
+    local stations = {[1] = 500, [2] = 600, [3] = 700}
+
+    assert(regulator.resolveStop(stations, {station = 600}) == 2,
+        "the station is found at its current position")
+
+    -- A station is inserted at the front; our station is now third.
+    local afterInsert = {[1] = 400, [2] = 500, [3] = 600, [4] = 700}
+    assert(regulator.resolveStop(afterInsert, {station = 600}) == 3,
+        "regulation follows the station, not the index")
+end
+
+-- If the regulating station is removed from the line, fall back to the first
+-- stop rather than pointing at nothing and silently not regulating.
+tests[#tests + 1] = function()
+    local stations = {[1] = 500, [2] = 700}
+
+    assert(regulator.resolveStop(stations, {station = 600}) == 1,
+        "a deleted regulation station falls back to stop 1")
+end
+
+-- Older entries may carry only an index. Use it when it still points at a
+-- stop, and fall back when it does not.
+tests[#tests + 1] = function()
+    local stations = {[1] = 500, [2] = 600}
+
+    assert(regulator.resolveStop(stations, {stop = 2}) == 2,
+        "an index-only entry still works")
+    assert(regulator.resolveStop(stations, {stop = 9}) == 1,
+        "an index past the end falls back to stop 1")
+    assert(regulator.resolveStop(stations, {}) == 1, "nothing configured is stop 1")
+    assert(regulator.resolveStop({}, {station = 600}) == 1, "no stations at all is stop 1")
+end
+
+-- Migration must carry the station across, not just its position.
+tests[#tests + 1] = function()
+    local migrated = regulator.migrate({
+        [77] = {hasTimetable = true, stations = {
+            [1] = {stationID = 111, conditions = {type = "None"}},
+            [2] = {stationID = 222, conditions = {type = "auto_debounce", auto_debounce = {1, 0}}},
+        }},
+    })
+
+    assert(migrated[77].station == 222,
+        "the station that was unbunching is remembered by id, got " .. tostring(migrated[77].station))
 end
 return {
     test = function()
