@@ -11,7 +11,7 @@ DEST="$MODS/timetables_plus_1"
 mkdir -p "$DEST"
 rsync -a --delete \
   --exclude .git --exclude .github --exclude docs --exclude tests \
-  --exclude .superpowers --exclude install.sh \
+  --exclude .superpowers --exclude install.sh --exclude test.sh \
   --exclude README.md --exclude documentation.md --exclude description.txt \
   --exclude .gitignore --exclude .luacheckrc \
   --exclude workshop_preview.jpg --exclude github_button.png \
