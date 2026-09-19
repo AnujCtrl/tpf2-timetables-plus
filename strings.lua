@@ -31,8 +31,8 @@ keep the constraints. The following constraints are available:
                                       chooses the closest arrival time
   - Unbunch: Set a time and vehicles will only depart the station in the given interval
             ]],
-            ["mod_name_i18n"] = "Timetables",
-            ["mod_description_i18n"] = "This mod adds timetables to the game",
+            ["mod_name_i18n"] = "Timetables Plus",
+            ["mod_description_i18n"] = "Keeps a line's vehicles evenly spaced instead of bunched up. Tick \"Even out intervals\" in any line window. No separate window, and nothing to configure per stop.",
         },
 
         de = {
@@ -65,8 +65,8 @@ Bedingungen einzuhalten. Folgende Bedingungen gibt es:
                      wählt die naheste Ankunftszeit
   - Takt: Setze eine Zeit, so dass der Zug die Station nur zu einem bestimmten Intervall verlässt
             ]],
-            ["mod_name_i18n"] = "Fahrpläne",
-            ["mod_description_i18n"] = "Diese Mod fügt dem Spiel Fahrpläne hinzu",
+            ["mod_name_i18n"] = "Fahrpläne Plus",
+            ["mod_description_i18n"] = "Hält die Fahrzeuge einer Linie gleichmäßig verteilt statt verklumpt. Aktiviere \"Abstände ausgleichen\" im Linienfenster. Kein separates Fenster, keine Konfiguration pro Haltestelle.",
         },
 
         ru = {
