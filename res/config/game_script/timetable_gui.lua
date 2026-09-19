@@ -1,4 +1,5 @@
 local timetable = require "celmi/timetables/timetable"
+local driver = require "celmi/timetables/driver"
 local timetableHelper = require "celmi/timetables/timetable_helper"
 
 local gui = require "gui"
@@ -1226,14 +1227,11 @@ function data()
             if co == nil or coroutine.status(co) == "dead" then
                 co = coroutine.create(timetableGUI.timetableCoroutine)
             end
-            for _ = 0, 20 do
-                local coroutineStatus = coroutine.status(co)
-                if coroutineStatus == "suspended" then
-                    local ok, msg = coroutine.resume(co)
-                    if not ok then print("Timetables coroutine error: " .. tostring(msg)) end
-                else
-                    print("Timetables failed to resume " .. coroutineStatus .. " coroutine.")
-                end
+            -- Bounded pump; stops early if the coroutine dies and reports a
+            -- failure once rather than once per step. See driver.lua.
+            local _, coroutineError = driver.pump(co, 20)
+            if coroutineError then
+                print("timetables_plus: coroutine error: " .. tostring(coroutineError))
             end
 
             -- TODO: check if needed
