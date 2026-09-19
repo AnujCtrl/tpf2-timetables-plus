@@ -112,6 +112,113 @@ tests[#tests + 1] = function()
     assert(#violations == 0, "tonumber(x:gsub(...)) found:\n  " .. table.concat(violations, "\n  "))
 end
 
+-- A Lua error escaping a game-script entry point (handleEvent, save, load,
+-- update, guiUpdate, guiHandleEvent, guiInit) or a widget handler
+-- (checkbox:onClick and friends) crashes the whole game; guard.call/
+-- guard.wrap are the only thing standing between a raise and that crash. See
+-- docs/CRASH_AUDIT_2026-09-19.md and celmi/timetables/guard.lua.
+local GUI_FILE = "res/config/game_script/timetable_gui.lua"
+local ENTRY_POINTS = {
+    "handleEvent", "save", "load", "update", "guiUpdate", "guiHandleEvent", "guiInit",
+}
+
+-- Entry points and handler registrations in this codebase wrap their body
+-- starting on the very next line or two; this is generous headroom, not a
+-- loophole.
+local GUARD_LOOKAHEAD = 5
+
+local function isGuardedNear(lines, fromLine)
+    for i = fromLine, math.min(fromLine + GUARD_LOOKAHEAD, #lines) do
+        local code = stripComment(lines[i] or "")
+        if code:find("guard%.call%(") or code:find("guard%.wrap%(") then
+            return true
+        end
+    end
+    return false
+end
+
+---Scan already-split, 1-indexed lines for entry points and widget handler
+---registrations that never reach guard.call/guard.wrap. Returns a list of
+---violation strings; empty means everything is covered.
+local function findUnguardedCallbacks(lines)
+    local violations = {}
+
+    for lineNumber, line in ipairs(lines) do
+        local code = stripComment(line)
+
+        for _, name in ipairs(ENTRY_POINTS) do
+            if code:find("^%s*" .. name .. "%s*=%s*function") then
+                if not isGuardedNear(lines, lineNumber) then
+                    violations[#violations + 1] = string.format(
+                        "line %d: entry point %s is not wrapped in guard.call", lineNumber, name)
+                end
+            end
+        end
+
+        -- Widget handler registrations, e.g. checkbox:onClick(...).
+        if code:find(":on%u%w*%(") then
+            if not isGuardedNear(lines, lineNumber) then
+                violations[#violations + 1] = string.format(
+                    "line %d: widget handler registration is not wrapped in guard.wrap", lineNumber)
+            end
+        end
+    end
+
+    return violations
+end
+
+local function readLines(path)
+    local file = assert(io.open(path, "r"), "shipped file missing from the repo: " .. path)
+    local lines = {}
+    for line in file:lines() do lines[#lines + 1] = line end
+    file:close()
+    return lines
+end
+
+tests[#tests + 1] = function()
+    local violations = findUnguardedCallbacks(readLines(GUI_FILE))
+    assert(#violations == 0,
+        "unguarded game-script callback(s):\n  " .. table.concat(violations, "\n  "))
+end
+
+-- Prove the scan actually catches something, not just that today's shipped
+-- file happens to be clean already: feed it a small sample with one
+-- unguarded entry point, one unguarded onClick, and one properly guarded
+-- entry point, and check it reports exactly the two bad ones.
+tests[#tests + 1] = function()
+    -- Deliberately spaced further apart than GUARD_LOOKAHEAD, so the
+    -- guarded save() in the middle cannot accidentally cover the unguarded
+    -- handleEvent above or the unguarded onClick below.
+    local sample = {
+        "function data()",
+        "    return {",
+        "        handleEvent = function(_, id)",
+        "            doSomethingUnguarded(id)",
+        "        end,",
+        "", "", "", "", "", "",
+        "        save = function()",
+        "            return guard.call(\"save\", function() return state end)",
+        "        end,",
+        "", "", "", "", "", "",
+        "    }",
+        "end",
+        "",
+        "checkbox:onClick(function()",
+        "    configChanged = true",
+        "end)",
+    }
+
+    local violations = findUnguardedCallbacks(sample)
+    local foundHandleEvent, foundOnClick = false, false
+    for _, v in ipairs(violations) do
+        if v:find("handleEvent") then foundHandleEvent = true end
+        if v:find("widget handler") then foundOnClick = true end
+    end
+    assert(foundHandleEvent, "the checker should flag the unguarded handleEvent")
+    assert(foundOnClick, "the checker should flag the unguarded onClick")
+    assert(#violations == 2, "save is guarded and must not be flagged, got " .. #violations)
+end
+
 return {
     test = function()
         for k, v in pairs(tests) do

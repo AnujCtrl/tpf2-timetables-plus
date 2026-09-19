@@ -21,6 +21,7 @@ local regulator = require "celmi/timetables/regulator"
 local timetableHelper = require "celmi/timetables/timetable_helper"
 local driver = require "celmi/timetables/driver"
 local probe = require "celmi/timetables/probe"
+local guard = require "celmi/timetables/guard"
 
 -- Script events are broadcast to every game script on the machine, so the id
 -- must be namespaced. Urban Games namespaces theirs (__taskEvent__).
@@ -29,6 +30,10 @@ local EVENT_ID = "__timetables_plus__"
 local state = nil
 local co = nil
 local configChanged = false
+-- The last state save() actually returned. save() must never return nil (the
+-- game persists whatever it gets back), so a guarded failure falls back to
+-- this instead.
+local lastSavedState = { }
 
 -------------------------------------------------------------
 ---------------------- Engine -------------------------------
@@ -159,7 +164,8 @@ local function regulationCoroutine()
 
         local lineVehicles = api.engine.system.transportVehicleSystem.getLine2VehicleMap()
         for line, vehicles in pairs(lineVehicles) do
-            regulateLine(line, vehicles)
+            -- One bad line must not cost every other line its pass.
+            guard.call("regulateLine", regulateLine, line, vehicles)
             coroutine.yield()
         end
 
@@ -212,7 +218,7 @@ local function buildRegulatorRow(line)
     local status = api.gui.comp.TextView.new(statusTextFor(line))
     status:setGravity(-1, 0.5)
 
-    checkbox:onClick(function()
+    checkbox:onClick(guard.wrap("checkbox.onClick", function()
         local nowEnabled = not regulator.isEnabled(line)
         regulator.setEnabled(line, nowEnabled)
         if nowEnabled then
@@ -225,9 +231,11 @@ local function buildRegulatorRow(line)
         checkboxImage:setImage(nowEnabled and "ui/checkbox1.tga" or "ui/checkbox0.tga", false)
         status:setText(statusTextFor(line))
         -- Drained in guiUpdate: a script event cannot be fired from inside a
-        -- GUI element callback (docs/API_FACTS.md).
+        -- GUI element callback (docs/API_FACTS.md). Only set once everything
+        -- above has succeeded, or a raise would leave the box flipped with
+        -- the engine never told.
         configChanged = true
-    end)
+    end))
 
     row:addRow({checkbox, label, status})
     return row
@@ -240,102 +248,132 @@ end
 function data()
     return {
         handleEvent = function (_, id, _, param)
-            if id == EVENT_ID then
-                if state == nil then state = {regulation = { }} end
-                -- Take the player's configuration, keep our own record of
-                -- which vehicles we are holding. Idempotent: an engine-side
-                -- echo back into this handler is not ruled out.
-                regulator.adoptGuiConfig(regulator.getState(), param)
-                state.regulation = regulator.getState()
-            end
+            guard.call("handleEvent", function()
+                if id == EVENT_ID then
+                    if state == nil then state = {regulation = { }} end
+                    -- Take the player's configuration, keep our own record of
+                    -- which vehicles we are holding. Idempotent: an
+                    -- engine-side echo back into this handler is not ruled
+                    -- out.
+                    regulator.adoptGuiConfig(regulator.getState(), param)
+                    state.regulation = regulator.getState()
+                end
+            end)
         end,
 
         save = function()
-            state = state or { }
-            state.regulation = regulator.getState()
+            local result = guard.call("save", function()
+                state = state or { }
+                state.regulation = regulator.getState()
+                return state
+            end)
 
-            return state
+            -- Never return nil: the game persists whatever comes back. On a
+            -- guarded failure, hand it the last state we did save.
+            if result ~= nil then lastSavedState = result end
+            return lastSavedState
         end,
 
         load = function(loadedState, reset)
-            -- `reset` means discard, not adopt.
-            if reset then return end
-            if loadedState == nil then return end
+            guard.call("load", function()
+                -- `reset` means discard, not adopt. The game has also been
+                -- seen passing a non-table (the boolean true) as the state;
+                -- indexing that below would crash the game.
+                if reset or type(loadedState) ~= "table" then return end
 
-            if state == nil then
-                state = loadedState
+                if state == nil then
+                    state = loadedState
 
-                if loadedState.regulation then
-                    regulator.setState(loadedState.regulation)
-                elseif loadedState.timetable then
-                    -- Saved by the Arr/Dep-era mod. Convert once.
-                    local migrated = regulator.migrate(loadedState.timetable)
-                    regulator.setState(migrated)
-                    state.regulation = migrated
-                    state.timetable = nil
-                    print("timetables_plus: migrated timetable state to interval regulation")
+                    if loadedState.regulation then
+                        regulator.setState(loadedState.regulation)
+                    elseif loadedState.timetable then
+                        -- Saved by the Arr/Dep-era mod. Convert once.
+                        local migrated = regulator.migrate(loadedState.timetable)
+                        regulator.setState(migrated)
+                        state.regulation = migrated
+                        state.timetable = nil
+                        print("timetables_plus: migrated timetable state to interval regulation")
+                    end
+                else
+                    -- Repeated call on the GUI thread. Take only what the
+                    -- engine owns, or this erases what the player is
+                    -- changing.
+                    regulator.adoptEngineState(
+                        regulator.getState(), loadedState.regulation or { })
                 end
-            else
-                -- Repeated call on the GUI thread. Take only what the engine
-                -- owns, or this erases what the player is changing.
-                regulator.adoptEngineState(
-                    regulator.getState(), loadedState.regulation or { })
-            end
+            end)
         end,
 
         update = function()
-            if state == nil then state = {regulation = { }} end
+            guard.call("update", function()
+                if state == nil then state = {regulation = { }} end
 
-            if co == nil or coroutine.status(co) == "dead" then
-                co = coroutine.create(regulationCoroutine)
-            end
+                if co == nil or coroutine.status(co) == "dead" then
+                    co = coroutine.create(regulationCoroutine)
+                end
 
-            local _, coroutineError = driver.pump(co, 20)
-            if coroutineError then
-                print("timetables_plus: coroutine error: " .. tostring(coroutineError))
-            end
+                -- The coroutine's own errors are already caught by
+                -- coroutine.resume (driver.pump reports them without
+                -- raising); this guard covers everything else in here.
+                local _, coroutineError = driver.pump(co, 20)
+                if coroutineError then
+                    print("timetables_plus: coroutine error: " .. tostring(coroutineError))
+                end
 
-            state.regulation = regulator.getState()
+                state.regulation = regulator.getState()
+            end)
         end,
 
         guiUpdate = function()
-            if configChanged then
-                game.interface.sendScriptEvent(EVENT_ID, "", regulator.getState())
-                configChanged = false
-            end
+            guard.call("guiUpdate", function()
+                if configChanged then
+                    game.interface.sendScriptEvent(EVENT_ID, "", regulator.getState())
+                    configChanged = false
+                end
+            end)
         end,
 
         guiHandleEvent = function(id, name, _)
-            -- The game raises idAdded for temp.view.entity_<N> whenever an
-            -- entity window opens. If that entity is a line, it is the line
-            -- window and we can append our control to it.
-            if name ~= "idAdded" then return end
-            if not id:match("^temp%.view%.entity_%d+$") then return end
+            guard.call("guiHandleEvent", function()
+                -- The game raises idAdded for temp.view.entity_<N> whenever
+                -- an entity window opens. If that entity is a line, it is
+                -- the line window and we can append our control to it.
+                if name ~= "idAdded" then return end
+                if not id:match("^temp%.view%.entity_%d+$") then return end
 
-            -- Capture the digits with match: gsub returns (string, count) and the count would
-            -- become tonumber's base, which raises "base out of range" and crashes the game.
-            local entityID = tonumber(id:match("^temp%.view%.entity_(%d+)$"))
-            if not entityID then return end
-            if not api.engine.getComponent(entityID, api.type.ComponentType.LINE) then return end
+                -- Capture the digits with match: gsub returns (string, count) and the count would
+                -- become tonumber's base, which raises "base out of range" and crashes the game.
+                local entityID = tonumber(id:match("^temp%.view%.entity_(%d+)$"))
+                if not entityID then return end
 
-            -- The same window id comes back when a line window is reopened,
-            -- and idAdded is not guaranteed to fire only once per window. Give
-            -- the row an id and skip if it is already there, or the control
-            -- stacks up.
-            local rowId = "timetables_plus.line." .. tostring(entityID)
-            if api.gui.util.getById(rowId) then return end
+                -- getComponent RAISES "Invalid entity" on an id that no
+                -- longer exists; entityExists is the safe check.
+                if not api.engine.entityExists(entityID) then return end
+                if not api.engine.getComponent(entityID, api.type.ComponentType.LINE) then
+                    return
+                end
 
-            local window = api.gui.util.downcast(api.gui.util.getById(id))
-            if not window then return end
+                -- The same window id comes back when a line window is
+                -- reopened, and idAdded is not guaranteed to fire only once
+                -- per window. Give the row an id and skip if it is already
+                -- there, or the control stacks up.
+                local rowId = "timetables_plus.line." .. tostring(entityID)
+                if api.gui.util.getById(rowId) then return end
 
-            local ok, err = pcall(function()
-                local row = buildRegulatorRow(entityID)
-                row:setId(rowId)
-                window:getContent():addItem(row, 0, 0)
+                local widget = api.gui.util.getById(id)
+                if not widget then return end
+                local window = api.gui.util.downcast(widget)
+                if not window then return end
+
+                local ok, err = pcall(function()
+                    local row = buildRegulatorRow(entityID)
+                    row:setId(rowId)
+                    window:getContent():addItem(row, 0, 0)
+                end)
+                if not ok then
+                    print("timetables_plus: could not add line window control: " .. tostring(err))
+                end
             end)
-            if not ok then
-                print("timetables_plus: could not add line window control: " .. tostring(err))
-            end
         end,
     }
 end

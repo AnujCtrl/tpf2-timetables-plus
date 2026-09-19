@@ -3,6 +3,7 @@ local lintTests = require "tests.lint_tests"
 local probeTests = require "tests.probe_tests"
 local driverTests = require "tests.driver_tests"
 local regulatorTests = require "tests.regulator_tests"
+local guardTests = require "tests.guard_tests"
 
 
 
@@ -21,3 +22,6 @@ driverTests.test()
 
 print("running regulator tests")
 regulatorTests.test()
+
+print("running guard tests")
+guardTests.test()
