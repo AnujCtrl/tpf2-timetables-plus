@@ -57,12 +57,20 @@ end
 local function regulateLine(line, vehicles)
     local entry = regulator.getState()[line]
 
-    if not (entry and entry.enabled) then
-        -- Not regulated. Release anything a previous setting left held,
-        -- otherwise turning the checkbox off would strand a vehicle.
-        for _, vehicle in pairs(vehicles) do
-            local vehicleInfo = timetableHelper.getVehicleInfo(vehicle)
-            if vehicleInfo then releaseVehicle(vehicle, vehicleInfo) end
+    -- Never configured. Do not touch this line's vehicles at all: walking
+    -- every vehicle in the game once a second is the cost that S3-1 was about.
+    if entry == nil then return end
+
+    if not entry.enabled then
+        -- Regulation was switched off. Release only what we were actually
+        -- holding, or unchecking the box would strand a vehicle - then stop
+        -- paying anything for this line.
+        if entry.waiting and next(entry.waiting) then
+            for vehicle in pairs(entry.waiting) do
+                local vehicleInfo = timetableHelper.getVehicleInfo(vehicle)
+                if vehicleInfo then releaseVehicle(vehicle, vehicleInfo) end
+            end
+            entry.waiting = { }
         end
         return
     end
@@ -298,11 +306,20 @@ function data()
             if not entityID then return end
             if not api.engine.getComponent(entityID, api.type.ComponentType.LINE) then return end
 
+            -- The same window id comes back when a line window is reopened,
+            -- and idAdded is not guaranteed to fire only once per window. Give
+            -- the row an id and skip if it is already there, or the control
+            -- stacks up.
+            local rowId = "timetables_plus.line." .. tostring(entityID)
+            if api.gui.util.getById(rowId) then return end
+
             local window = api.gui.util.downcast(api.gui.util.getById(id))
             if not window then return end
 
             local ok, err = pcall(function()
-                window:getContent():addItem(buildRegulatorRow(entityID), 0, 0)
+                local row = buildRegulatorRow(entityID)
+                row:setId(rowId)
+                window:getContent():addItem(row, 0, 0)
             end)
             if not ok then
                 print("timetables_plus: could not add line window control: " .. tostring(err))
