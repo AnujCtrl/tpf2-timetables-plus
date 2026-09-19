@@ -117,11 +117,39 @@ At this size the cost of shipping the whole object 5×/second is small. The
 whole-object sync is a **correctness** problem, not a performance one; the
 frequency poll (S3-1) was the real performance win.
 and needs asking first.
+## Lua version — verified, not assumed
+
+The game embeds **Lua 5.2.2**. Confirmed from the shipped binary, not from any
+mod's assumption:
+
+    $ strings -a ".../Transport Fever 2/TransportFever2" | grep LuaVersion
+    $LuaVersion: Lua 5.2.2  Copyright (C) 1994-2013 Lua.org, PUC-Rio $
+
+This matters because 5.3+ constructs (integer division, bitwise operators,
+`math.type`, `table.move`, `string.pack`, `<const>`) parse fine on a newer host
+Lua and then fail in the game. Upstream's CI has this blind spot: its workflow
+uses `leafo/gh-actions-lua`, which does not pin 5.2.
+
+Mitigations, both verified by injecting a violation and watching them catch it:
+
+- `./test.sh` runs the suite on **Lua 5.2.4 first** — the game's language
+  version — and then on a newer Lua as a stricter cross-check. Both must pass.
+  The newer run earns its place: 5.3+ errors on `string.format("%d", x)` for a
+  non-integer float where 5.2 truncates silently, so a 5.4-only failure on a
+  5.2-green suite usually means a real latent bug.
+- `tests/lint_tests.lua` scans every shipped file for 5.3+/5.4-only constructs.
+  It **discovers** the file list with `find` rather than hardcoding it, because
+  a hardcoded list already let one new module slip past.
+
+`res/scripts/celmi/timetables/ops.lua` binds `table.unpack or unpack` rather
+than depending on either being present.
+
 ## Tests
 
-    lua5.4 tests/main_tests.lua
+    ./test.sh
 
 Runs from the repo root (the tests `require` via `.res.scripts...` paths).
+The runner exercises Lua 5.2 first, then a newer Lua as a stricter check.
 A failed `assert` exits non-zero — verified by injecting a failure.
 
 Coverage is narrower than the file count suggests:

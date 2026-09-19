@@ -18,9 +18,11 @@ the same module paths, deliberately so — see `docs/CONTEXT.md`.
 
 ## Tests
 
-    lua5.4 tests/main_tests.lua
+    ./test.sh
 
-Run from the repo root. A failed `assert` exits non-zero.
+Runs the suite on **Lua 5.2** — the version the game embeds — and again on a
+newer Lua as a stricter cross-check. Both must pass. Verified by injecting a
+failing assertion and watching the runner exit non-zero.
 
 ## Read first
 
