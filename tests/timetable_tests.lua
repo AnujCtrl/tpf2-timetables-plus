@@ -866,6 +866,47 @@ timetableTests[#timetableTests + 1] = function()
     assert(timetable.getConditionType(1, 1) == "None",
         "last slot removed, falls back to None")
 end
+
+-- S3-2: timetable entries for deleted lines linger forever. cleanTimetable
+-- did this in O(n^2) - it called getLines() once per line - and its call site
+-- was commented out anyway. It also deleted GUI-owned configuration from the
+-- engine thread, which the per-field split forbids.
+timetableTests[#timetableTests + 1] = function()
+    timetable.setTimetableObject({
+        [1] = {hasTimetable = true, stations = {}},
+        [2] = {hasTimetable = true, stations = {}},
+        [7] = {hasTimetable = true, stations = {}},
+    })
+
+    local removed = timetable.pruneDeletedLines({1, 7})
+
+    assert(removed == 1, "exactly one line pruned, got " .. tostring(removed))
+    assert(timetable.getTimetableObject()[2] == nil, "the deleted line is gone")
+    assert(timetable.getTimetableObject()[1] ~= nil, "a live line survives")
+    assert(timetable.getTimetableObject()[7] ~= nil, "and so does the other")
+end
+
+-- An empty line list means "I could not read the lines", not "the player
+-- deleted every line". Wiping the whole timetable on a transient API hiccup
+-- would destroy the player's configuration irrecoverably.
+timetableTests[#timetableTests + 1] = function()
+    timetable.setTimetableObject({[1] = {hasTimetable = true, stations = {}}})
+
+    assert(timetable.pruneDeletedLines({}) == 0, "an empty line list prunes nothing")
+    assert(timetable.pruneDeletedLines(nil) == 0, "and so does a nil one")
+    assert(timetable.getTimetableObject()[1] ~= nil, "the timetable is untouched")
+end
+
+-- Savegames store line ids as strings (the real gtnh kab save has
+-- ["107136"]), so the comparison must not be type-sensitive.
+timetableTests[#timetableTests + 1] = function()
+    timetable.setTimetableObject({["107136"] = {hasTimetable = true, stations = {}}})
+
+    local removed = timetable.pruneDeletedLines({107136})
+
+    assert(removed == 0, "a string key matching a numeric line id is not deleted")
+    assert(next(timetable.getTimetableObject()) ~= nil, "the line survives")
+end
 return {
     test = function()
         for k,v in pairs(timetableTests) do

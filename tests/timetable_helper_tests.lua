@@ -96,6 +96,21 @@ tests[#tests + 1] = function()
     assert(timetableHelper.getTime() == 3600,
         "getTime still returns seconds")
 end
+
+-- pruneDeletedLines needs the raw line ids. getAllLines() wraps each in a
+-- {id, name} table, which is more work than the prune needs.
+tests[#tests + 1] = function()
+    fakeApi.install()
+    fakeApi.setLine(11, {})
+    fakeApi.setLine(22, {})
+
+    local ids = timetableHelper.getAllLineIds()
+
+    assert(type(ids) == "table", "returns a table")
+    local seen = {}
+    for _, id in pairs(ids) do seen[id] = true end
+    assert(seen[11] and seen[22], "carries every line id")
+end
 return {
     test = function()
         for k, v in pairs(tests) do

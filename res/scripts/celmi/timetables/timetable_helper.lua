@@ -289,6 +289,12 @@ function timetableHelper.getFrequency(line)
     end
 end
 
+---Raw line ids, without the {id, name} wrapping getAllLines does.
+---@return table array of line ids
+function timetableHelper.getAllLineIds()
+    return api.engine.system.lineSystem.getLines()
+end
+
 -- returns [{id : number, name : String}]
 function timetableHelper.getAllLines()
     local res = {}
@@ -306,16 +312,6 @@ function timetableHelper.getAllLines()
     return res
 end
 
--- returns [lineID]
-function timetableHelper.lineExists(lineID)
-    local apiLines = api.engine.system.lineSystem.getLines()
-
-    for apiLineNr, apiLineID in pairs(apiLines) do
-        if tonumber(lineID) == tonumber(apiLineID) then return true end
-    end
-
-    return false
-end
 
 ---@param line number | string
 -- returns [time: Number] Array indexed by station index in sec starting with index 1

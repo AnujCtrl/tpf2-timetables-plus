@@ -949,20 +949,38 @@ function timetable.shiftSlot(slot, offset)
     return {shiftArr[1], shiftArr[2], shiftDep[1], shiftDep[2]}
 end
 
--- removes old lines from timetable
-function timetable.cleanTimetable()
-    for lineID, _ in pairs(timetableObject) do
-        if not timetableHelper.lineExists(lineID) then
+---Drop timetable entries for lines the player has deleted.
+---
+---Replaces cleanTimetable, which called getLines() once per line (O(n^2)).
+---Takes the line list as an argument so it is testable and so the caller
+---decides when to pay for it.
+---
+---Line ids arrive from savegames as strings (the real save has ["107136"]) so
+---the comparison is on tonumber, not on the raw key.
+---@param existingLineIds table|nil array of line ids currently in the game
+---@return number removed how many entries were dropped
+function timetable.pruneDeletedLines(existingLineIds)
+    -- An empty list means "could not read the lines", not "every line was
+    -- deleted". Acting on it would wipe the player's whole configuration.
+    if type(existingLineIds) ~= "table" then return 0 end
+    if next(existingLineIds) == nil then return 0 end
+
+    local exists = { }
+    for _, lineID in pairs(existingLineIds) do
+        local asNumber = tonumber(lineID)
+        if asNumber then exists[asNumber] = true end
+    end
+
+    local removed = 0
+    for lineID in pairs(timetableObject) do
+        local asNumber = tonumber(lineID)
+        if not (asNumber and exists[asNumber]) then
             timetableObject[lineID] = nil
-            print("removed line " .. lineID)
-        else
-            local stations = timetableHelper.getAllStations(lineID)
-            for stationID = #stations + 1, #timetableObject[lineID].stations, 1 do
-                timetableObject[lineID].stations[stationID] = nil
-                print("removed station " .. stationID)
-            end
+            removed = removed + 1
         end
     end
+
+    return removed
 end
 
 return timetable

@@ -94,7 +94,10 @@ end
 -- fills the station table on the left side with all stations that have constraints
 function timetableGUI.stFillStations()
     -- list all stations that are part of a timetable 
-    timetable.cleanTimetable() -- remove old lines no longer in the game
+    -- Drop entries for lines the player deleted. This runs on the GUI thread,
+    -- which owns configuration under the per-field split, so it is the right
+    -- place for it. Opening the window is an infrequent, user-driven moment.
+    timetable.pruneDeletedLines(timetableHelper.getAllLineIds())
     timetableChanged = true
 
     menu.stStations:deleteAll()
@@ -1173,7 +1176,6 @@ function timetableGUI.timetableCoroutine()
             timetable.updateFor(line, vehicles)
             coroutine.yield()
         end
-        -- timetable.cleanTimetable()
         coroutine.yield()
     end
 end

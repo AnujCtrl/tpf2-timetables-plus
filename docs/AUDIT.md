@@ -197,11 +197,18 @@ object for serialisation every frame.
 
 ---
 
-## S3-2 · `cleanTimetable` is O(n²) and unreachable
+## S3-2 · `cleanTimetable` is O(n²)
 
 `timetable.lua` — calls `timetableHelper.lineExists(lineID)` per line, and
 `lineExists` (`timetable_helper.lua:301`) calls `getLines()` and scans it every
-time. It is moot in practice: the call site in the coroutine is commented out.
+time.
+
+**Correction (2026-09-19).** This audit originally said the call site was
+commented out. That was wrong: `timetable_gui.lua:97` called `cleanTimetable`
+on every open of the station tab. Only the *second* call site, inside the
+coroutine, was commented out. Removing the function on the strength of the
+original claim would have produced a nil-call in game that no test could have
+caught, because the game_script cannot be loaded from a test.
 
 ---
 
@@ -259,29 +266,30 @@ Stage 1 (correctness) complete. Every fix had a test watched failing first.
 | Finding | Status | Test |
 | --- | --- | --- |
 | S1-1 force departure dead code | fixed | `timetable_tests` #16 |
-| S2-1 whole-object sync race | **open** — stage 3 | — |
+| S2-1 whole-object sync race | fixed — per-field ownership | `timetable_tests` #23–25 |
 | S2-2 scans one arbitrary vehicle | fixed | `timetable_tests` #17 |
 | S2-3 `slots == {}` never fires | fixed | `timetable_tests` #19 |
 | S2-4 read path reorders saved slots | fixed | `timetable_tests` #18 |
 | S2-5 nil crash paths | fixed (3 sites) | `helper_tests` #1–3, `timetable_tests` #20, #21 |
 | S2-6 truthy `-1` / `"ERROR"` returns | fixed (3 fns) | `helper_tests` #5, #6 |
-| S3-1 per-tick all-lines poll | **open** — stage 2 | — |
-| S3-2 `cleanTimetable` O(n²), dead | **open** — stage 2 | — |
-| S4-1 coroutine driver | **deferred to stage 3** | — |
+| S3-1 per-tick all-lines poll | fixed | `timetable_tests` #26 |
+| S3-2 `cleanTimetable` O(n²) | fixed — replaced by `pruneDeletedLines` | `timetable_tests` #28–30 |
+| S4-1 coroutine driver | fixed — extracted to `driver.lua` | `driver_tests` #1–3 |
 | S4-2 display fn mutates state | fixed (2 sites) | `helper_tests` #7, `timetable_tests` #22 |
 | S4-3 `pcall` result named `err` | fixed | covered by existing |
 | S4-4 shadowed `sec` local | fixed | covered by existing |
 
-## Why S4-1 is deferred rather than fixed
+## S4-1 — deferred, then fixed
 
-The coroutine driver lives in `res/config/game_script/timetable_gui.lua`, inside
-the closure returned by `data()`. That file is not requireable from a test — it
-pulls in the `gui` module and builds live API widgets at load. Fixing the driver
-now would mean production code with no test behind it.
+It was deferred from stage 1 because it lived inside the closure returned by
+`data()` in `res/config/game_script/timetable_gui.lua`, which cannot be
+required from a test: that file pulls in the `gui` module and builds live API
+widgets at load. Fixing it there would have meant production code with no test
+behind it.
 
-Stage 3 restructures this file anyway. The driver moves to a requireable module
-under `res/scripts/celmi/timetables/`, where it can be tested, and gets fixed
-there.
+**Done 2026-09-19.** The driver moved to
+`res/scripts/celmi/timetables/driver.lua` and is tested against real
+coroutines — one that yields forever, one that finishes, and one that errors.
 
 ## S2-5, on moving a crash rather than removing one
 
