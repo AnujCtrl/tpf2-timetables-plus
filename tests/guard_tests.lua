@@ -88,6 +88,31 @@ tests[#tests + 1] = function()
     assert(#lines == 1, "still logs something, got " .. tostring(#lines))
 end
 
+-- THE GAME REPLACES table.unpack. Transport Fever 2's own res/scripts/init.lua:86 does
+--     local oldunpack = table.unpack
+--     table.unpack = function(t) if type(t) == "userdata" then ... else return oldunpack(t) end end
+-- which silently DROPS the (i, j) arguments. guard.call used to return
+-- table.unpack(packed, 2, packed.n), so IN THE GAME it returned xpcall's `true`
+-- instead of fn's result: save() would have handed the game `true` and every
+-- line's regulation config would have been lost on the next load. Results must
+-- travel as varargs, never through unpack.
+tests[#tests + 1] = function()
+    local realUnpack = table.unpack
+    table.unpack = function(t) return realUnpack(t) end -- exactly what the game installs
+    local state = { regulation = { [107136] = { enabled = true } } }
+    local ok, err = pcall(function()
+        local saved = guard.call("save", function() return state end)
+        assert(saved == state, "guard.call must return fn's value under the game's table.unpack, got "
+            .. tostring(saved))
+        local a, b, c = guard.call("multi", function() return 1, nil, 3 end)
+        assert(a == 1 and b == nil and c == 3, "multiple results with a nil in the middle")
+        local wrapped = guard.wrap("click", function(x) return x * 2 end)
+        assert(wrapped(21) == 42, "guard.wrap must pass the result through too")
+    end)
+    table.unpack = realUnpack
+    assert(ok, err)
+end
+
 return {
     test = function()
         for k, v in pairs(tests) do

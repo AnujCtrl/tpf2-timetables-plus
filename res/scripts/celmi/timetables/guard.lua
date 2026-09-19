@@ -46,14 +46,20 @@ end
 ---@param label string identifies the callback in the log
 ---@param fn function
 ---@return any ... fn's return values, or nil if it raised
-function guard.call(label, fn, ...)
-    local packed = table.pack(xpcall(fn, debug.traceback, ...))
-    if packed[1] then
-        return table.unpack(packed, 2, packed.n)
-    end
-
-    reportError(label, packed[2])
+---Hands xpcall's results on as varargs: everything after the status on
+---success, nil after reporting on failure.
+local function finish(label, ok, ...)
+    if ok then return ... end
+    reportError(label, (...))
     return nil
+end
+
+-- NO unpack IN HERE. Transport Fever 2's own res/scripts/init.lua:86 replaces
+-- table.unpack with a one-argument version that drops (i, j), so
+-- table.unpack(packed, 2, packed.n) returned xpcall's `true` instead of fn's
+-- result - in the game only, never on the host. Results travel as varargs.
+function guard.call(label, fn, ...)
+    return finish(label, xpcall(fn, debug.traceback, ...))
 end
 
 ---Wrap fn so every call runs under guard.call. For widget callbacks (a
