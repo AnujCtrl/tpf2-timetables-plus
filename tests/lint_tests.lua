@@ -87,6 +87,31 @@ tests[#tests + 1] = function()
         "Lua 5.2 compatibility violations:\n  " .. table.concat(violations, "\n  "))
 end
 
+-- string.gsub returns TWO values: the string and the number of replacements. Passed straight to
+-- tonumber, the count becomes the `base` argument, and a count of 0 or 1 raises "bad argument #2 to
+-- 'tonumber' (base out of range)". In an unguarded GUI callback that takes the game down, which is
+-- what timetable_gui.lua's guiHandleEvent did on 2026-09-19 every time an entity window opened.
+-- Wrap the call in parentheses to drop the count, or capture the digits with string.match.
+tests[#tests + 1] = function()
+    local violations = {}
+    for _, path in ipairs(shipped) do
+        local file = assert(io.open(path, "r"), "shipped file missing from the repo: " .. path)
+        local lineNumber = 0
+        for line in file:lines() do
+            lineNumber = lineNumber + 1
+            local code = stripComment(line)
+            -- tonumber( immediately followed by an expression ending in :gsub(...) with no
+            -- parenthesis of its own around it
+            if code:find("tonumber%(%s*[%w_%.%[%]\"']+:gsub%(") then
+                violations[#violations + 1] = string.format(
+                    "%s:%d passes gsub's two results to tonumber; the count becomes the base", path, lineNumber)
+            end
+        end
+        file:close()
+    end
+    assert(#violations == 0, "tonumber(x:gsub(...)) found:\n  " .. table.concat(violations, "\n  "))
+end
+
 return {
     test = function()
         for k, v in pairs(tests) do

@@ -312,7 +312,9 @@ function data()
             if name ~= "idAdded" then return end
             if not id:match("^temp%.view%.entity_%d+$") then return end
 
-            local entityID = tonumber(id:gsub("temp%.view%.entity_", ""))
+            -- Capture the digits with match: gsub returns (string, count) and the count would
+            -- become tonumber's base, which raises "base out of range" and crashes the game.
+            local entityID = tonumber(id:match("^temp%.view%.entity_(%d+)$"))
             if not entityID then return end
             if not api.engine.getComponent(entityID, api.type.ComponentType.LINE) then return end
 
