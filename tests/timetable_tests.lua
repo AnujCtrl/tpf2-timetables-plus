@@ -632,9 +632,13 @@ timetableTests[#timetableTests + 1] = function()
         "getNextSlot must leave the caller's slot order untouched")
 end
 
--- S2-3: a stop configured as ArrDep but holding no slots must fall back to
--- "None". The old guard compared `slots == {}`, which in Lua is always false
--- because tables compare by identity, so the reset never happened.
+-- S2-3: a stop configured as ArrDep but holding no slots must release the
+-- vehicle. The old guard compared `slots == {}`, which in Lua is always false
+-- because tables compare by identity, so it never fired at all.
+--
+-- It must NOT repair the condition type here. Conditions are GUI-owned under
+-- the per-field split, so an engine write would be reverted by the next config
+-- push. The repair lives in removeCondition instead.
 timetableTests[#timetableTests + 1] = function()
     timetable.setTimetableObject({
         [1] = {
@@ -648,8 +652,8 @@ timetableTests[#timetableTests + 1] = function()
     local departed = timetable.readyToDepartArrDep(1, 100, {1}, 100, 1, 1, {})
 
     assert(departed == true, "a stop with no slots should release the vehicle")
-    assert(timetable.getConditionType(1, 1) == "None",
-        "a stop with no slots should reset its condition type to None")
+    assert(timetable.getConditionType(1, 1) == "ArrDep",
+        "the engine must not rewrite GUI-owned conditions")
 end
 
 -- S2-5: with no previous departure known, unbunching has no constraint to work
@@ -726,6 +730,141 @@ timetableTests[#timetableTests + 1] = function()
 
     assert(#needed == 1, "only one line uses auto_debounce with a timetable, got " .. #needed)
     assert(needed[1] == 1, "line 1 is the one needing a frequency")
+end
+
+--[[
+S2-1, approach B': per-field ownership.
+
+  GUI owns    hasTimetable, forceDeparture, minWaitEnabled, maxWaitEnabled,
+              stations[].stationID, stations[].conditions
+  engine owns frequency, stations[].vehiclesWaiting
+
+Each direction copies only what it owns and preserves the rest, which is how
+Urban Games' own guidesystem.lua handles two-way state. Previously both
+directions replaced the whole tree, so each could discard the other's work.
+--]]
+
+-- GUI side: take the engine's bookkeeping, keep the user's configuration.
+timetableTests[#timetableTests + 1] = function()
+    local guiCopy = {
+        [1] = {
+            hasTimetable = true,
+            frequency = 111,
+            stations = {
+                [1] = {
+                    stationID = 7,
+                    conditions = {type = "ArrDep", ArrDep = {{1, 0, 2, 0}}},
+                    vehiclesWaiting = {["99"] = {departureTime = 1}},
+                },
+            },
+        },
+    }
+    local engineSnapshot = {
+        [1] = {
+            hasTimetable = false,                      -- engine must not win this
+            frequency = 600,                           -- engine owns this
+            stations = {
+                [1] = {
+                    stationID = 999,                   -- engine must not win this
+                    conditions = {type = "None"},      -- engine must not win this
+                    vehiclesWaiting = {["42"] = {departureTime = 2}},
+                },
+            },
+        },
+    }
+
+    timetable.adoptEngineState(guiCopy, engineSnapshot)
+
+    assert(guiCopy[1].hasTimetable == true, "GUI keeps its own hasTimetable")
+    assert(guiCopy[1].stations[1].stationID == 7, "GUI keeps its own stationID")
+    assert(guiCopy[1].stations[1].conditions.type == "ArrDep", "GUI keeps its own conditions")
+    assert(guiCopy[1].frequency == 600, "GUI takes the engine's frequency")
+    assert(guiCopy[1].stations[1].vehiclesWaiting["42"] ~= nil,
+        "GUI takes the engine's vehiclesWaiting")
+    assert(guiCopy[1].stations[1].vehiclesWaiting["99"] == nil,
+        "and drops its own stale copy of it")
+end
+
+-- Engine side: take the user's configuration, keep our own bookkeeping.
+timetableTests[#timetableTests + 1] = function()
+    local engineCopy = {
+        [1] = {
+            hasTimetable = false,
+            frequency = 600,
+            stations = {
+                [1] = {
+                    stationID = 7,
+                    conditions = {type = "None"},
+                    vehiclesWaiting = {["42"] = {departureTime = 2}},
+                },
+            },
+        },
+    }
+    local guiBlob = {
+        [1] = {
+            hasTimetable = true,
+            forceDeparture = true,
+            frequency = nil,                        -- GUI does not own this
+            stations = {
+                [1] = {
+                    stationID = 7,
+                    conditions = {type = "ArrDep", ArrDep = {{1, 0, 2, 0}}},
+                    vehiclesWaiting = {},           -- GUI does not own this
+                },
+            },
+        },
+    }
+
+    timetable.adoptGuiConfig(engineCopy, guiBlob)
+
+    assert(engineCopy[1].hasTimetable == true, "engine takes the GUI's hasTimetable")
+    assert(engineCopy[1].forceDeparture == true, "engine takes the GUI's settings")
+    assert(engineCopy[1].stations[1].conditions.type == "ArrDep",
+        "engine takes the GUI's conditions")
+    assert(engineCopy[1].frequency == 600, "engine keeps its own frequency")
+    assert(engineCopy[1].stations[1].vehiclesWaiting["42"] ~= nil,
+        "engine keeps its own vehiclesWaiting - this is the lost update that used to happen")
+end
+
+-- Deleting a line or a stop in the GUI must actually delete it on the engine.
+timetableTests[#timetableTests + 1] = function()
+    local engineCopy = {
+        [1] = {hasTimetable = true, stations = {
+            [1] = {stationID = 7, conditions = {type = "None"}},
+            [2] = {stationID = 8, conditions = {type = "None"}},
+        }},
+        [2] = {hasTimetable = true, stations = {}},
+    }
+    local guiBlob = {
+        [1] = {hasTimetable = true, stations = {
+            [1] = {stationID = 7, conditions = {type = "None"}},
+        }},
+    }
+
+    timetable.adoptGuiConfig(engineCopy, guiBlob)
+
+    assert(engineCopy[2] == nil, "a line removed in the GUI is removed on the engine")
+    assert(engineCopy[1].stations[2] == nil, "a stop removed in the GUI is removed too")
+    assert(engineCopy[1].stations[1] ~= nil, "the remaining stop survives")
+end
+
+-- Under per-field ownership the engine must not rewrite conditions, so the
+-- "no slots left, fall back to None" repair belongs here, on the config
+-- owner's side, where the last slot is actually removed.
+timetableTests[#timetableTests + 1] = function()
+    timetable.setTimetableObject({
+        [1] = {hasTimetable = true, stations = {
+            [1] = {stationID = 1, conditions = {type = "ArrDep", ArrDep = {{1,0,2,0}, {3,0,4,0}}}},
+        }},
+    })
+
+    timetable.removeCondition(1, 1, "ArrDep", 1)
+    assert(timetable.getConditionType(1, 1) == "ArrDep",
+        "one slot left, still an ArrDep stop")
+
+    timetable.removeCondition(1, 1, "ArrDep", 1)
+    assert(timetable.getConditionType(1, 1) == "None",
+        "last slot removed, falls back to None")
 end
 return {
     test = function()

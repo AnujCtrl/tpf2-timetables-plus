@@ -67,6 +67,97 @@ function timetable.setTimetableObject(t)
     end
 end
 
+--[[
+Per-field state ownership between the two Lua states.
+
+  GUI owns     hasTimetable, forceDeparture, minWaitEnabled, maxWaitEnabled,
+               stations[].stationID, stations[].conditions
+  engine owns  frequency, stations[].vehiclesWaiting
+
+The two states cannot share memory. The engine publishes via save(), which the
+GUI receives in load() about five times a second; the GUI publishes by sending
+its blob to the engine's handleEvent. Previously each direction replaced the
+whole tree, so each could silently discard the other's concurrent work.
+
+These two functions copy only what the caller owns. This mirrors Urban Games'
+own guidesystem.lua, which preserves the engine-owned field in one direction
+and the GUI-owned fields in the other.
+--]]
+
+local GUI_OWNED_LINE_FIELDS = {
+    "hasTimetable", "forceDeparture", "minWaitEnabled", "maxWaitEnabled",
+}
+
+---Apply the engine's snapshot to the GUI's copy, keeping the user's
+---configuration intact.
+---@param into table the GUI's timetable object, mutated in place
+---@param from table the snapshot received in load()
+function timetable.adoptEngineState(into, from)
+    if type(into) ~= "table" or type(from) ~= "table" then return end
+
+    for lineID, fromLine in pairs(from) do
+        local intoLine = into[lineID]
+        if type(intoLine) == "table" and type(fromLine) == "table" then
+            intoLine.frequency = fromLine.frequency
+
+            for stopNr, fromStop in pairs(fromLine.stations or {}) do
+                local intoStop = intoLine.stations and intoLine.stations[stopNr]
+                if type(intoStop) == "table" and type(fromStop) == "table" then
+                    intoStop.vehiclesWaiting = fromStop.vehiclesWaiting
+                end
+            end
+        end
+    end
+end
+
+---Apply the GUI's configuration to the engine's copy, keeping the engine's
+---own vehicle bookkeeping intact.
+---@param into table the engine's timetable object, mutated in place
+---@param from table the blob received in handleEvent()
+function timetable.adoptGuiConfig(into, from)
+    if type(into) ~= "table" or type(from) ~= "table" then return end
+
+    for lineID, fromLine in pairs(from) do
+        local intoLine = into[lineID]
+
+        if type(intoLine) ~= "table" or type(fromLine) ~= "table" then
+            -- A line the engine has never seen: take it wholesale. It carries
+            -- no engine-owned state yet.
+            into[lineID] = fromLine
+        else
+            for _, field in ipairs(GUI_OWNED_LINE_FIELDS) do
+                intoLine[field] = fromLine[field]
+            end
+
+            intoLine.stations = intoLine.stations or {}
+            local fromStations = fromLine.stations or {}
+
+            for stopNr, fromStop in pairs(fromStations) do
+                local intoStop = intoLine.stations[stopNr]
+                if type(intoStop) ~= "table" or type(fromStop) ~= "table" then
+                    intoLine.stations[stopNr] = fromStop
+                else
+                    intoStop.stationID = fromStop.stationID
+                    intoStop.conditions = fromStop.conditions
+                    -- vehiclesWaiting is the engine's: deliberately not copied.
+                end
+            end
+
+            -- Stops the user removed must go, or they linger forever.
+            for stopNr in pairs(intoLine.stations) do
+                if fromStations[stopNr] == nil then
+                    intoLine.stations[stopNr] = nil
+                end
+            end
+        end
+    end
+
+    -- Lines the user removed must go too.
+    for lineID in pairs(into) do
+        if from[lineID] == nil then into[lineID] = nil end
+    end
+end
+
 function timetable.setConditionType(line, stationNumber, type)
     local stationID = timetableHelper.getStationID(line, stationNumber)
     if not(line and stationNumber) then return -1 end
@@ -270,7 +361,15 @@ function timetable.removeCondition(line, station, type, index)
 
     if type == "ArrDep" then
         local tmpTable = timetableObject[line].stations[station].conditions.ArrDep
-        if tmpTable and tmpTable[index] then return table.remove(tmpTable, index) end
+        if tmpTable and tmpTable[index] then
+            local removed = table.remove(tmpTable, index)
+            -- Last slot gone: this stop is no longer an ArrDep stop. Done here
+            -- rather than on the engine because conditions are GUI-owned.
+            if next(tmpTable) == nil then
+                timetableObject[line].stations[station].conditions.type = "None"
+            end
+            return removed
+        end
     else
         -- just remove the whole condition
         local tmpTable = timetableObject[line].stations[station].conditions[type]
@@ -434,7 +533,8 @@ end
 function timetable.readyToDepartArrDep(vehicle, doorsTime, vehicles, currentTime, line, stop, vehiclesWaiting)
     local slots = timetableObject[line].stations[stop].conditions.ArrDep
     if not slots or next(slots) == nil then
-        timetableObject[line].stations[stop].conditions.type = "None"
+        -- Type is deliberately NOT reset here: conditions are GUI-owned, so an
+        -- engine write would be reverted by the next config push anyway.
         -- If there aren't any timetable slots, then the vehicle should depart now.
         return true
     end

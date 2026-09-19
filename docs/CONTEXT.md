@@ -141,8 +141,8 @@ Mitigations, both verified by injecting a violation and watching them catch it:
   It **discovers** the file list with `find` rather than hardcoding it, because
   a hardcoded list already let one new module slip past.
 
-`res/scripts/celmi/timetables/ops.lua` binds `table.unpack or unpack` rather
-than depending on either being present.
+Version-sensitive stdlib calls bind defensively (`table.unpack or unpack`)
+rather than depending on either being present.
 
 ## Tests
 

@@ -20,6 +20,10 @@ local state = nil
 
 local timetableChanged = false
 
+-- Script events are broadcast to every game script on the machine, so the id
+-- must be namespaced. Urban Games namespaces theirs (__taskEvent__).
+local TIMETABLE_EVENT_ID = "__timetables_plus__"
+
 local stationTableScrollOffset
 local lineTableScrollOffset
 local constraintTableScrollOffset
@@ -1178,28 +1182,43 @@ function data()
         --engine Thread
 
         handleEvent = function (_, id, _, param)
-            if id == "timetableUpdate" then
+            if id == TIMETABLE_EVENT_ID then
                 if state == nil then state = {timetable = {}} end
-                state.timetable = param
-                timetable.setTimetableObject(state.timetable)
-                timetableChanged = true
+                -- Engine side of the per-field split: take the user's
+                -- configuration, keep our own vehiclesWaiting bookkeeping.
+                -- Idempotent, because an engine-originated echo back into this
+                -- same handler is not ruled out (docs/API_FACTS.md).
+                timetable.adoptGuiConfig(timetable.getTimetableObject(), param)
+                state.timetable = timetable.getTimetableObject()
             end
         end,
 
         save = function()
-            -- save happens once for both threads to verify loading and saving works
-            -- then the engine thread repeatedly saves its state for the gui thread to load
-            state = {}
+            -- Serialized into the savegame, and also handed to the GUI thread's
+            -- load() about five times a second.
+            state = state or {}
             state.timetable = timetable.getTimetableObject()
-            
+
             return state
         end,
 
-        load = function(loadedState)
-            -- load happens once for engine thread and repeatedly for gui thread
-            state = loadedState or {timetable = {}}
-            
-            timetable.setTimetableObject(state.timetable)
+        load = function(loadedState, reset)
+            -- The engine passes a second argument. `reset` means discard this
+            -- state, not adopt it - see docs/API_FACTS.md RISK 5 and Urban
+            -- Games' own res/scripts/guidesystem.lua.
+            if reset then return end
+            if loadedState == nil then return end
+
+            if state == nil then
+                -- First call: savegame restore. Adopt wholesale.
+                state = loadedState
+                timetable.setTimetableObject(loadedState.timetable or {})
+            else
+                -- Repeated call on the GUI thread. Take only what the engine
+                -- owns, or this overwrites whatever the user is editing.
+                timetable.adoptEngineState(
+                    timetable.getTimetableObject(), loadedState.timetable or {})
+            end
         end,
 
         update = function()
@@ -1231,7 +1250,7 @@ function data()
 
         guiUpdate = function()
             if timetableChanged then
-                game.interface.sendScriptEvent("timetableUpdate", "", timetable.getTimetableObject())
+                game.interface.sendScriptEvent(TIMETABLE_EVENT_ID, "", timetable.getTimetableObject())
                 timetableChanged = false
             end
 
