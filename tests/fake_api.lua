@@ -31,6 +31,24 @@ function fakeApi.setStopVehicles(line, stop, vehicles)
     stopVehicles[line][stop] = vehicles
 end
 
+--- Number of times game.interface.getEntity has been called since install().
+fakeApi.legacyEntityCalls = 0
+
+--- Make game.interface.getEntity return this table for an entity.
+function fakeApi.setLegacyEntity(entity, value)
+    components[entity] = components[entity] or {}
+    components[entity].ENTITY = value
+end
+
+--- Make game.interface.getEntity raise for this entity, the way the real one
+--- does for ids the legacy interface will not accept. Every such throw makes
+--- TpF2 write a multi-megabyte minidump, so the production code must avoid
+--- reaching this at all.
+function fakeApi.makeLegacyEntityThrow(entity)
+    components[entity] = components[entity] or {}
+    components[entity].ENTITY_THROWS = true
+end
+
 --- Commands the code under test sent, in order.
 fakeApi.commands = {}
 
@@ -41,6 +59,7 @@ function fakeApi.install()
     lineVehicles = {}
     stopVehicles = {}
     fakeApi.commands = {}
+    fakeApi.legacyEntityCalls = 0
 
     -- The mod's translation function; identity is enough for tests.
     _G._ = function(key) return key end
@@ -58,6 +77,9 @@ function fakeApi.install()
             },
         },
         engine = {
+            entityExists = function(entity)
+                return components[entity] ~= nil
+            end,
             getComponent = function(entity, componentType)
                 local onEntity = components[entity]
                 return onEntity and onEntity[componentType] or nil
@@ -100,7 +122,11 @@ function fakeApi.install()
     _G.game = {
         interface = {
             getEntity = function(entity)
+                fakeApi.legacyEntityCalls = fakeApi.legacyEntityCalls + 1
                 local onEntity = components[entity]
+                if onEntity and onEntity.ENTITY_THROWS then
+                    error("value is not a number")
+                end
                 return onEntity and onEntity.ENTITY or nil
             end,
             getLines = function() return lines end,

@@ -111,6 +111,64 @@ tests[#tests + 1] = function()
     for _, id in pairs(ids) do seen[id] = true end
     assert(seen[11] and seen[22], "carries every line id")
 end
+
+--[[
+getFrequency reaches game.interface.getEntity, which raises a C++ side error
+for ids the legacy interface will not accept. TpF2 writes a ~2.4 MB minidump
+AT THROW TIME, before Lua unwinds, so catching the error does not help: the
+dump is already on disk. Observed 2026-09-21: 129 dumps, 322 MB, one roughly
+every 2.7 seconds, which pushed the machine into swap.
+
+So the rule is: never hand the legacy interface an id we have not validated
+against the engine's own view first.
+--]]
+
+-- An id that is not an entity at all must never reach getEntity.
+tests[#tests + 1] = function()
+    fakeApi.install()
+
+    assert(timetableHelper.getFrequency(999) == -2,
+        "an unknown id reports no frequency")
+    assert(fakeApi.legacyEntityCalls == 0,
+        "and the legacy interface is never called with it")
+end
+
+-- An entity that exists but is not a line must never reach getEntity either.
+tests[#tests + 1] = function()
+    fakeApi.install()
+    fakeApi.setComponent(500, "NAME", {name = "a station, not a line"})
+
+    assert(timetableHelper.getFrequency(500) == -2, "a non-line reports no frequency")
+    assert(fakeApi.legacyEntityCalls == 0, "and never reaches the legacy interface")
+end
+
+-- A real line still works.
+tests[#tests + 1] = function()
+    fakeApi.install()
+    fakeApi.setComponent(107136, "LINE", {stops = {}})
+    fakeApi.setLegacyEntity(107136, {frequency = 1 / 207})
+
+    local frequency = timetableHelper.getFrequency(107136)
+
+    assert(math.abs(frequency - 207) < 0.001,
+        "frequency is the reciprocal of what the engine reports, got " .. tostring(frequency))
+    assert(fakeApi.legacyEntityCalls == 1, "reached the legacy interface exactly once")
+end
+
+-- If it throws anyway, that line is never tried again. One dump, not one per
+-- second forever.
+tests[#tests + 1] = function()
+    fakeApi.install()
+    fakeApi.setComponent(4242, "LINE", {stops = {}})
+    fakeApi.makeLegacyEntityThrow(4242)
+
+    assert(timetableHelper.getFrequency(4242) == -2, "a throwing line reports no frequency")
+    assert(fakeApi.legacyEntityCalls == 1, "it was attempted once")
+
+    assert(timetableHelper.getFrequency(4242) == -2, "still no frequency")
+    assert(fakeApi.legacyEntityCalls == 1,
+        "and it is NOT attempted again - this is what stops the dump storm")
+end
 return {
     test = function()
         for k, v in pairs(tests) do

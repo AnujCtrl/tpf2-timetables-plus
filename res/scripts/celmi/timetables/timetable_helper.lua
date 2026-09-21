@@ -274,19 +274,55 @@ end
 
 ---@param line number | string
 -- returns lineFrequency in seconds
+--[[
+Lines the legacy interface has already rejected.
+
+game.interface.getEntity raises a C++ side error for ids it will not accept,
+and TpF2's crash handler writes a ~2.4 MB minidump AT THROW TIME, before Lua
+unwinds. So catching the error does not help - the dump is already on disk.
+On 2026-09-21 one unresolvable line, retried once a second, produced 129
+dumps totalling 322 MB and pushed the machine into swap.
+
+Two defences, in order: never hand the legacy interface an id we have not
+validated against the engine's own view, and if it throws anyway, never ask
+about that line again.
+--]]
+local legacyEntityRejected = { }
+
+---Forget which lines were rejected. Called on savegame load, since entity ids
+---mean nothing across saves.
+function timetableHelper.clearRejectedLines()
+    legacyEntityRejected = { }
+end
+
+---@param line number | string
+-- returns lineFrequency in seconds, -1 for a bad argument, -2 for unknown
 function timetableHelper.getFrequency(line)
     if type(line) == "string" then line = tonumber(line) end
     if not(type(line) == "number") then return -1 end
 
-    local lineEntity = game.interface.getEntity(line)
+    if legacyEntityRejected[line] then return -2 end
+
+    -- api.engine calls are safe; the legacy one is not. Check with the safe
+    -- ones first. A line id from getLine2VehicleMap is not automatically an
+    -- id game.interface.getEntity will accept.
+    if not api.engine.entityExists(line) then return -2 end
+    if not api.engine.getComponent(line, api.type.ComponentType.LINE) then return -2 end
+
+    local ok, lineEntity = pcall(game.interface.getEntity, line)
+    if not ok then
+        legacyEntityRejected[line] = true
+        print("timetables_plus: game.interface.getEntity rejected line "
+            .. tostring(line) .. "; not asking again this session")
+        return -2
+    end
 
     if lineEntity and lineEntity.frequency then
         if lineEntity.frequency == 0 then return -2 end
         return 1 / lineEntity.frequency
-        
-    else
-        return -2
     end
+
+    return -2
 end
 
 ---Raw line ids, without the {id, name} wrapping getAllLines does.
