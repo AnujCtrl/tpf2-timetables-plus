@@ -40,6 +40,15 @@ local function reportError(label, traceback)
     end
 end
 
+---The same log line for a callback that did not raise but has something to
+---confess (save() falling back to an earlier state, load() being handed a
+---boolean): prefixed, throttled per message, and unable to raise.
+---@param label string identifies the callback in the log
+---@param message string
+function guard.report(label, message)
+    reportError(label, message)
+end
+
 ---Run fn(...) under xpcall so a Lua error inside it cannot escape into the
 ---game. On success, returns whatever fn returned (however many values). On
 ---failure, logs it (throttled) and returns nil.

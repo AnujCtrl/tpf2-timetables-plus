@@ -30,10 +30,24 @@ local EVENT_ID = "__timetables_plus__"
 local state = nil
 local co = nil
 local configChanged = false
--- The last state save() actually returned. save() must never return nil (the
--- game persists whatever it gets back), so a guarded failure falls back to
--- this instead.
-local lastSavedState = { }
+-- The last known good state: what load() delivered, then whatever save() last
+-- built successfully. The game persists whatever save() returns, verbatim, so
+-- a save() that cannot build a fresh state hands back this instead. It starts
+-- as nil and never as `{ }`: an empty table is a state too, and persisting it
+-- silently replaced the player's whole configuration with nothing.
+--
+-- Held by reference, and in practice the same table as `state`. That is
+-- deliberate. It stays as current as the state itself, in whichever of the two
+-- Lua states save() turns out to run in; a snapshot taken at load() would be
+-- re-saved over everything done since.
+local lastGoodState = nil
+
+---A state worth adopting or re-saving. nil and `{ }` are how the game says
+---"nothing was saved" (Urban Games' own guidesystem.lua treats them so); the
+---game has also been seen handing load() the boolean true.
+local function isUsableState(candidate)
+    return type(candidate) == "table" and next(candidate) ~= nil
+end
 
 -------------------------------------------------------------
 ---------------------- Engine -------------------------------
@@ -245,6 +259,29 @@ end
 ----------------------- Callbacks ---------------------------
 -------------------------------------------------------------
 
+---What save() hands the game when it could not build a fresh state. Runs
+---outside the guard, so it must not be able to raise: type checks, a
+---throttled log line that cannot raise, and a table constructor.
+local function stateToResave()
+    local known = lastGoodState
+    -- Nothing loaded and no save has succeeded yet, but update()/handleEvent
+    -- may already be keeping a live state (a new game the player configured
+    -- while every save() failed). That is a real state; do not drop it for
+    -- the default.
+    if known == nil and isUsableState(state) then known = state end
+
+    if known ~= nil then
+        guard.report("save", "could not build a fresh state; the previous state was re-saved")
+        return known
+    end
+
+    -- Genuinely nothing: a new game whose first save() failed. The default
+    -- every new game starts with; load() adopts it as "regulates nothing".
+    guard.report("save", "could not build a fresh state and no earlier state is known; "
+        .. "an empty state was saved")
+    return {regulation = { }}
+end
+
 function data()
     return {
         handleEvent = function (_, id, _, param)
@@ -262,27 +299,49 @@ function data()
         end,
 
         save = function()
-            local result = guard.call("save", function()
+            local fresh = guard.call("save", function()
                 state = state or { }
                 state.regulation = regulator.getState()
                 return state
             end)
 
-            -- Never return nil: the game persists whatever comes back. On a
-            -- guarded failure, hand it the last state we did save.
-            if result ~= nil then lastSavedState = result end
-            return lastSavedState
+            -- The game persists whatever comes back, verbatim, and hands it
+            -- to load() next session: nil stores nothing, `true` stored
+            -- `true`. So a table, always, and never an emptier one than the
+            -- best we know of.
+            if isUsableState(fresh) then
+                lastGoodState = fresh
+                return fresh
+            end
+
+            return stateToResave()
         end,
 
         load = function(loadedState, reset)
             guard.call("load", function()
-                -- `reset` means discard, not adopt. The game has also been
-                -- seen passing a non-table (the boolean true) as the state;
-                -- indexing that below would crash the game.
-                if reset or type(loadedState) ~= "table" then return end
+                -- `reset` means discard, not adopt.
+                if reset then return end
+
+                -- Nothing below may run for a value that is not a state:
+                -- whatever this session already holds stays exactly as it
+                -- is. nil and `{ }` are the ordinary "nothing was saved" and
+                -- pass quietly. Anything else is a save that lost its state
+                -- (the game stored `true` on 2026-09-19 and handed it back
+                -- here), and indexing it below would crash the game.
+                if not isUsableState(loadedState) then
+                    if loadedState ~= nil and type(loadedState) ~= "table" then
+                        guard.report("load", "was given a " .. type(loadedState) .. " ("
+                            .. tostring(loadedState) .. "), not a state; ignored, and the "
+                            .. "state already held is kept")
+                    end
+                    return
+                end
 
                 if state == nil then
                     state = loadedState
+                    -- Seed the save fallback: from here on a failing save()
+                    -- re-saves this, never an empty table.
+                    lastGoodState = loadedState
 
                     if loadedState.regulation then
                         regulator.setState(loadedState.regulation)

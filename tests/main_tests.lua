@@ -4,6 +4,7 @@ local probeTests = require "tests.probe_tests"
 local driverTests = require "tests.driver_tests"
 local regulatorTests = require "tests.regulator_tests"
 local guardTests = require "tests.guard_tests"
+local saveFallbackTests = require "tests.save_fallback_tests"
 
 
 
@@ -25,3 +26,6 @@ regulatorTests.test()
 
 print("running guard tests")
 guardTests.test()
+
+print("running save fallback tests")
+saveFallbackTests.test()

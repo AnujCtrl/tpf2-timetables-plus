@@ -113,6 +113,25 @@ tests[#tests + 1] = function()
     assert(ok, err)
 end
 
+-- guard.report is the same log line for a callback that recovered rather
+-- than raised (save() re-saving an earlier state, load() being handed a
+-- boolean): same prefix, same throttle, and it cannot raise either.
+tests[#tests + 1] = function()
+    local badMessage = setmetatable({}, {__tostring = function() error("message tostring exploded") end})
+    local lines = captureLines(function()
+        for _ = 1, 150 do guard.report("save", "the previous state was re-saved") end
+    end)
+    assert(#lines == 2, "repeats 1 and 100 of one message, got " .. tostring(#lines))
+    assert(lines[1] == "timetables_plus: save: the previous state was re-saved", lines[1])
+
+    -- What it prints for an unformattable message is the throttled stand-in
+    -- an earlier test may already have used up; only "does not raise" is
+    -- being pinned here.
+    captureLines(function()
+        assert(pcall(guard.report, "save", badMessage), "guard.report must never raise")
+    end)
+end
+
 return {
     test = function()
         for k, v in pairs(tests) do

@@ -33,3 +33,40 @@ only logged. This audit looked for more of the same. Nothing is left in "will cr
   parked on manual departure back to auto. C6 one bad line aborts the rest of that second's pass (pcall each
   line). C8 a NaN frequency would hold a vehicle for ever (suspicion). C9 state.timetable only cleared on
   migration. About two thirds of timetable_helper.lua has no caller in the shipped code.
+
+## Save fallback (2026-09-19)
+
+**Bug.** The game writes whatever save() returns into `<save>.sav.lua`, verbatim, and hands it to load() next
+session. save() kept a fallback for a guarded failure, but it was initialised to `{ }` and replaced by anything
+that was not nil. So a first save() that failed persisted `{ }`, and a guard that returned a non-table persisted
+that: the 15:09 autosave holds `["timetable_gui.lua"] = true` and every regulated line's config in it is gone
+(the unpack-based guard returned xpcall's `true`; mechanism fixed in 7c425ea). No log line either way.
+
+**Fix** (`res/config/game_script/timetable_gui.lua`, `guard.report` added to `celmi/timetables/guard.lua`):
+- `lastGoodState` starts as nil, is seeded by the first usable load() and refreshed by every successful save().
+  Usable = a non-empty table. It is held by reference (in practice the same table as `state`), so it is as
+  current as the state itself and never a stale snapshot, in whichever Lua state save() runs.
+- save() returns the fresh state only if it is a usable table. Otherwise it returns `lastGoodState`; failing
+  that the live `state` that update()/handleEvent have been keeping (new game, player configured lines, every
+  save failed); failing that the new-game default `{regulation = { }}`. Never a non-table, never `{ }`. One
+  line is logged: `timetables_plus: save: could not build a fresh state; the previous state was re-saved`
+  (throttled like every guard line: first occurrence, then every 100th).
+- load() already ignored a non-table without touching held state; it now also logs one line for it
+  (`timetables_plus: load: was given a boolean (true), not a state; ignored, ...`). nil, `{ }` and `reset` stay
+  silent: they are the game's ordinary "nothing to adopt" (guidesystem.lua:1343). `{ }` is no longer adopted as
+  the session's state, which used to make the real state arriving next look like a repeat call (only `waiting`
+  copied) - one route into C3.
+- Tests: `tests/save_fallback_tests.lua` drives the real game_script through data() under fakes, including two
+  coexisting copies standing in for the engine and GUI states.
+
+**Still unverified in the game.**
+- Which thread the game calls save() on (the wiki says engine; nothing on this machine proves it). The code is
+  written to be right in both; the two-state test pins that the GUI copy re-saves the newest engine data it has.
+- That load() precedes the first update()/save() on the engine thread. If update() ran first, `state` would be
+  non-nil and the sidecar's config would be taken for a repeat call. Unchanged by this fix.
+- Whether one Lua state is reused when a second savegame is loaded in the same session; if so the fallback
+  (like `state` itself) would belong to the first save. Unchanged by this fix.
+- Whether the GUI's load() is handed a non-table at startup in normal play; if it is, expect one benign
+  `load: was given ...` line per session.
+- The poisoned 15:09 autosave is not repaired by any of this: load it and the mod starts empty (and now says
+  so). Load `gtnh kab.sav` instead.
