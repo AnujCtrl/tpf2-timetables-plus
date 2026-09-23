@@ -59,12 +59,39 @@ local function stopConfigFor(line, stop)
     return stops and stops[stop] or nil
 end
 
----getFrequency returns -1 and -2 as error codes, which are perfectly good
----numbers and would otherwise be treated as a headway.
+local headwaySourceLogged = { }
+
+---The line's target headway, in seconds.
+---
+---game.interface.getEntity is the only published route to a line's frequency,
+---and it rejects some perfectly valid line ids - 264322 in this save while
+---107136 works. A rejected line used to get no headway at all, so every
+---vehicle was released immediately and the line bunched.
+---
+---The game's own figure is preferred where it is available, since it is what
+---the player sees. Otherwise the same quantity is derived from api.engine
+---data, which cannot throw.
 local function headwayFor(line)
+    -- getFrequency returns -1 and -2 as error codes, which are perfectly good
+    -- numbers and would otherwise be treated as a headway.
     local frequency = timetableHelper.getFrequency(line)
-    if type(frequency) ~= "number" or frequency <= 0 then return nil end
-    return frequency
+    local legacy = nil
+    if type(frequency) == "number" and frequency > 0 then legacy = frequency end
+
+    local computed = regulator.headwayFrom(
+        timetableHelper.getLegTimes(line),
+        timetableHelper.getLineVehicleCount(line))
+
+    -- Log both once per line. On a line where the legacy call works, this is
+    -- what confirms the derived figure agrees with the game's own.
+    if not headwaySourceLogged[line] then
+        headwaySourceLogged[line] = true
+        print(string.format(
+            "timetables_plus: line %s headway legacy=%s computed=%s",
+            tostring(line), tostring(legacy), tostring(computed)))
+    end
+
+    return legacy or computed
 end
 
 local function releaseVehicle(vehicle, vehicleInfo)

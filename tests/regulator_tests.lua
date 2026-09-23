@@ -340,6 +340,40 @@ tests[#tests + 1] = function()
     assert(migrated[77].station == 222,
         "the station that was unbunching is remembered by id, got " .. tostring(migrated[77].station))
 end
+
+--[[
+The legacy game.interface.getEntity is the only published route to a line's
+frequency, and it rejects some perfectly valid line ids - 264322 in the real
+game, while 107136 works. A rejected line got no headway, so the regulator
+released every vehicle and the trains bunched, which is the bug this fixes.
+
+Headway is computable from api.engine alone: lap time over vehicle count.
+--]]
+tests[#tests + 1] = function()
+    -- Three legs of 60s, two vehicles: one passes any point every 90s.
+    assert(regulator.headwayFrom({60, 60, 60}, 2) == 90,
+        "lap time over vehicle count")
+
+    assert(regulator.headwayFrom({60, 60, 60}, 1) == 180,
+        "a single vehicle's headway is the whole lap")
+end
+
+-- Every unusable input must yield nil, so the caller releases the vehicle
+-- rather than holding it against a nonsense target.
+tests[#tests + 1] = function()
+    assert(regulator.headwayFrom(nil, 2) == nil, "no section times")
+    assert(regulator.headwayFrom({}, 2) == nil, "empty section times")
+    assert(regulator.headwayFrom({60, 60}, 0) == nil, "no vehicles on the line")
+    assert(regulator.headwayFrom({60, 60}, nil) == nil, "unknown vehicle count")
+    assert(regulator.headwayFrom({0, 0}, 2) == nil, "a zero lap time is not a headway")
+end
+
+-- Section times arrive as floats from the game and may carry junk entries.
+tests[#tests + 1] = function()
+    assert(regulator.headwayFrom({30.5, 29.5}, 1) == 60, "floats sum correctly")
+    assert(regulator.headwayFrom({60, "x", 60}, 1) == 120,
+        "a non-numeric entry is skipped rather than throwing")
+end
 return {
     test = function()
         for k, v in pairs(tests) do

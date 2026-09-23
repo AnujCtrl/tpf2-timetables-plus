@@ -2,6 +2,7 @@ local fakeApi = require "tests.fake_api"
 fakeApi.install()
 
 local timetableHelper = require ".res.scripts.celmi.timetables.timetable_helper"
+local regulator = require ".res.scripts.celmi.timetables.regulator"
 
 local tests = {}
 
@@ -168,6 +169,30 @@ tests[#tests + 1] = function()
     assert(timetableHelper.getFrequency(4242) == -2, "still no frequency")
     assert(fakeApi.legacyEntityCalls == 1,
         "and it is NOT attempted again - this is what stops the dump storm")
+end
+
+
+-- Headway is derived by the caller from these two pieces, so the helper stays
+-- a thin wrapper and the arithmetic stays testable in regulator.headwayFrom.
+tests[#tests + 1] = function()
+    fakeApi.install()
+    fakeApi.setLine(42, {1, 2})
+    fakeApi.setComponent(1, "TRANSPORT_VEHICLE", {sectionTimes = {60, 60, 60}})
+
+    assert(timetableHelper.getLineVehicleCount(42) == 2, "two vehicles on the line")
+
+    local legs = timetableHelper.getLegTimes(42)
+    assert(regulator.headwayFrom(legs, timetableHelper.getLineVehicleCount(42)) == 90,
+        "180s lap over 2 vehicles is a 90s headway")
+end
+
+tests[#tests + 1] = function()
+    fakeApi.install()
+    fakeApi.setLine(43, {})
+
+    assert(timetableHelper.getLineVehicleCount(43) == 0, "no vehicles")
+    assert(timetableHelper.getLineVehicleCount(9999) == 0, "unknown line")
+    assert(timetableHelper.getLineVehicleCount(nil) == 0, "nil line")
 end
 return {
     test = function()

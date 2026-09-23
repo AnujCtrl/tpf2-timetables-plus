@@ -258,6 +258,22 @@ end
 
 ---@param line number | string
 -- returns lineFrequency : String, formatted '%M:%S'
+---How many vehicles run this line. The caller combines it with getLegTimes to
+---derive headway, keeping this module a thin wrapper over the game's API.
+---@param line number|string
+---@return number
+function timetableHelper.getLineVehicleCount(line)
+    if type(line) == "string" then line = tonumber(line) end
+    if type(line) ~= "number" then return 0 end
+
+    local vehicles = timetableHelper.getVehiclesOnLine(line)
+    if type(vehicles) ~= "table" then return 0 end
+
+    local count = 0
+    for _ in pairs(vehicles) do count = count + 1 end
+    return count
+end
+
 function timetableHelper.getFrequencyString(line)
     local frequency = timetableHelper.getFrequencyMinSec(line)
     if frequency == -1 then return "ERROR" end

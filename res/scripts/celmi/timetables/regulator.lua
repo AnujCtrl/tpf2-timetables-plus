@@ -307,4 +307,30 @@ function regulator.adoptGuiConfig(into, from)
         if from[line] == nil then into[line] = nil end
     end
 end
+
+---Headway computed from the line itself, without the legacy interface.
+---
+---game.interface.getEntity is the only *published* route to a line's frequency,
+---but it rejects some valid line ids - and a rejected line got no headway, so
+---the regulator released every vehicle and they bunched. This is the same
+---quantity derived from api.engine data, which cannot throw.
+---
+---@param sectionTimes table|nil per-leg travel times, TransportVehicle.sectionTimes
+---@param vehicleCount number|nil vehicles running the line
+---@return number|nil headway in seconds, nil when it cannot be computed
+function regulator.headwayFrom(sectionTimes, vehicleCount)
+    if type(sectionTimes) ~= "table" then return nil end
+    if type(vehicleCount) ~= "number" or vehicleCount <= 0 then return nil end
+
+    local lapTime = 0
+    for _, sectionTime in pairs(sectionTimes) do
+        -- The game hands these over as floats; skip anything that is not one
+        -- rather than letting it throw on the engine thread.
+        if type(sectionTime) == "number" then lapTime = lapTime + sectionTime end
+    end
+
+    if lapTime <= 0 then return nil end
+
+    return lapTime / vehicleCount
+end
 return regulator
