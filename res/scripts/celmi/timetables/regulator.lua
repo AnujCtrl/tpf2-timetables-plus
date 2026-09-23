@@ -180,7 +180,30 @@ end
 ---@param maxWait number|nil the stop's own maximum waiting time
 ---@return string action "hold" or "depart"
 ---@return number departAt the time it should leave
+---What to do with a vehicle sitting at the regulation stop.
+---
+---Three outcomes, deliberately distinct:
+---  "hold"        wait until departAt
+---  "depart"      it is time, or there was nothing to wait for
+---  "unregulated" we cannot regulate at all - release, and say so
+---
+---The third exists because a line whose headway could not be read behaved
+---exactly like a line with nothing to wait for: it released every vehicle and
+---bunched, silently, for a whole session. Releasing is still correct - holding
+---against an unknown target strands the vehicle - but it must be visible.
+---@return string action
+---@return number departAt
 function regulator.decide(now, arrivalTime, lastDeparture, headway, minWait, maxWait)
+    if type(headway) ~= "number" or headway <= 0 then
+        return "unregulated", arrivalTime
+    end
+
+    -- An unreadable clock must never strand a vehicle: 0 >= departAt is false,
+    -- so treating it as a real time would hold the vehicle forever.
+    if type(now) ~= "number" or now <= 0 then
+        return "unregulated", arrivalTime
+    end
+
     local planned = regulator.plannedDeparture(lastDeparture, headway, arrivalTime)
     local departAt = regulator.clampToStop(arrivalTime, planned, minWait, maxWait)
 

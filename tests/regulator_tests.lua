@@ -180,14 +180,18 @@ tests[#tests + 1] = function()
     assert(departAt == 1100 + 180, "cut to the stop's maximum wait")
 end
 
--- A line that cannot be regulated releases immediately, in every case.
+-- Releasing is right in all of these, but the REASON differs and the mod must
+-- be able to tell them apart. Conflating them is what made the bunching bug
+-- invisible: a line whose headway could not be read looked exactly like a line
+-- with nothing to wait for.
 tests[#tests + 1] = function()
     assert(regulator.decide(1100, 1100, nil, 600, nil, nil) == "depart",
-        "no previous departure")
-    assert(regulator.decide(1100, 1100, 1000, nil, nil, nil) == "depart",
-        "no headway")
-    assert(regulator.decide(1100, 1100, 1000, 0, nil, nil) == "depart",
-        "zero headway")
+        "no previous departure is nothing to wait for - a normal release")
+
+    assert(regulator.decide(1100, 1100, 1000, nil, nil, nil) == "unregulated",
+        "no headway is an inability, and must be reported as one")
+    assert(regulator.decide(1100, 1100, 1000, 0, nil, nil) == "unregulated",
+        "zero headway likewise")
 end
 
 -- The stop's minimum is honoured even when regulation wants an early release.
@@ -373,6 +377,79 @@ tests[#tests + 1] = function()
     assert(regulator.headwayFrom({30.5, 29.5}, 1) == 60, "floats sum correctly")
     assert(regulator.headwayFrom({60, "x", 60}, 1) == 120,
         "a non-numeric entry is skipped rather than throwing")
+end
+
+--[[
+Regression evals built from real values observed in game on 2026-09-23,
+line 264322, the line that bunched:
+
+  probe: vehicle=174827 line=264322 stop=1 gameTime=219889600
+         doorsTime=219888800000 lineStopDeparture=219753
+         minWaitingTime=0 maxWaitingTime=180
+
+  now          = floor(219889600 / 1000)      = 219889   (ms)
+  arrivalTime  = floor(219888800000 / 1000000)= 219888   (us)
+  lastDeparture                                = 219753
+--]]
+local REAL = {
+    now = 219889,
+    arrivalTime = 219888,
+    lastDeparture = 219753,
+    minWait = 0,
+    maxWait = 180,
+}
+
+-- With a headway, this vehicle must be held: only 135s had passed since the
+-- previous departure from that stop.
+tests[#tests + 1] = function()
+    local action, departAt = regulator.decide(
+        REAL.now, REAL.arrivalTime, REAL.lastDeparture, 207, REAL.minWait, REAL.maxWait)
+
+    assert(action == "hold",
+        "135s after the last departure with a 207s headway must hold, got " .. tostring(action))
+    assert(departAt > REAL.now, "and the departure must be in the future")
+end
+
+-- The bug as it actually happened: no headway, so it departed immediately and
+-- the line bunched. Releasing is right - holding against an unknown target
+-- would strand the vehicle - but it must be DISTINGUISHABLE from a normal
+-- release, or the failure is invisible. It was invisible for a whole session.
+tests[#tests + 1] = function()
+    local action = regulator.decide(
+        REAL.now, REAL.arrivalTime, REAL.lastDeparture, nil, REAL.minWait, REAL.maxWait)
+
+    assert(action == "unregulated",
+        "no headway is an inability to regulate, not a decision to depart; got "
+        .. tostring(action))
+end
+
+-- Same for a nonsense headway.
+tests[#tests + 1] = function()
+    assert(regulator.decide(REAL.now, REAL.arrivalTime, REAL.lastDeparture, 0,
+        REAL.minWait, REAL.maxWait) == "unregulated", "a zero headway cannot regulate")
+    assert(regulator.decide(REAL.now, REAL.arrivalTime, REAL.lastDeparture, -5,
+        REAL.minWait, REAL.maxWait) == "unregulated", "nor can a negative one")
+end
+
+-- Nothing has departed this stop yet. That is a legitimate "nothing to wait
+-- for", NOT an inability - so it is a normal depart, not unregulated.
+tests[#tests + 1] = function()
+    local action = regulator.decide(REAL.now, REAL.arrivalTime, nil, 207,
+        REAL.minWait, REAL.maxWait)
+
+    assert(action == "depart",
+        "no previous departure is nothing to wait for, not a failure; got " .. tostring(action))
+end
+
+-- A vehicle must never be held because the clock is unreadable. getTime
+-- returns 0 in that case, and 0 >= departAt is false, so the old decide held
+-- the vehicle forever - stranded at the platform.
+tests[#tests + 1] = function()
+    local action = regulator.decide(0, REAL.arrivalTime, REAL.lastDeparture, 207,
+        REAL.minWait, REAL.maxWait)
+
+    assert(action ~= "hold",
+        "an unreadable clock must never strand a vehicle, got " .. tostring(action))
 end
 return {
     test = function()

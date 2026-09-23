@@ -60,6 +60,7 @@ local function stopConfigFor(line, stop)
 end
 
 local headwaySourceLogged = { }
+local unregulatedLogged = { }
 
 ---The line's target headway, in seconds.
 ---
@@ -174,7 +175,21 @@ local function regulateLine(line, vehicles)
                     end
                 end
 
-                if action == "hold" then
+                if action == "unregulated" then
+                    -- We cannot regulate this line at all. Release - holding
+                    -- against an unknown target strands the vehicle - but say
+                    -- so once, because this looked exactly like normal
+                    -- operation while a line bunched for a whole session.
+                    if not unregulatedLogged[line] then
+                        unregulatedLogged[line] = true
+                        print(string.format(
+                            "timetables_plus: line %s is enabled but cannot be regulated "
+                            .. "(no headway available); releasing vehicles unregulated",
+                            tostring(line)))
+                    end
+                    entry.waiting[vehicle] = nil
+                    releaseVehicle(vehicle, vehicleInfo)
+                elseif action == "hold" then
                     entry.waiting[vehicle] = {departureTime = departAt}
                     if vehicleInfo.autoDeparture then
                         timetableHelper.stopAutoVehicleDeparture(vehicle)
@@ -194,14 +209,20 @@ local function regulateLine(line, vehicles)
 end
 
 local function regulationCoroutine()
-    local lastRun = -1
+    local lastRun = nil
 
     while true do
-        -- Once a second is plenty; update() runs at 5 Hz.
-        while timetableHelper.getTime() - lastRun < 1 do
+        -- Once a second is plenty; update() runs at 5 Hz. getTime returns nil
+        -- when the clock cannot be read, and subtracting from nil would throw
+        -- on the engine thread - so wait for a readable clock instead.
+        while true do
+            local now = timetableHelper.getTime()
+            if now and (lastRun == nil or now - lastRun >= 1) then
+                lastRun = now
+                break
+            end
             coroutine.yield()
         end
-        lastRun = timetableHelper.getTime()
 
         local lineVehicles = api.engine.system.transportVehicleSystem.getLine2VehicleMap()
         for line, vehicles in pairs(lineVehicles) do

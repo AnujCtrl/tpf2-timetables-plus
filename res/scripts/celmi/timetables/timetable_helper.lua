@@ -515,14 +515,24 @@ function timetableHelper.getRawGameTime()
     return 0
 end
 
+---Game time in whole seconds, or nil if the clock cannot be read.
+---
+---getComponent returns nil when a component is absent, and this used to index
+---.gameTime on it before checking - so the nil branch below was unreachable
+---and the real failure was a throw on the engine thread.
+---
+---nil, never 0: decide() compares now >= departAt, and 0 is never >= a real
+---time, so a 0 clock would hold every vehicle at its platform forever.
+---@return number|nil seconds
 function timetableHelper.getTime()
-    local time = api.engine.getComponent(api.engine.util.getWorld(), api.type.ComponentType.GAME_TIME).gameTime
-    if time then
-        time = math.floor(time/ 1000)
-        return time
-    else
-        return 0
+    local gameTime = api.engine.getComponent(
+        api.engine.util.getWorld(), api.type.ComponentType.GAME_TIME)
+
+    if gameTime and gameTime.gameTime then
+        return math.floor(gameTime.gameTime / 1000)
     end
+
+    return nil
 end
 
 ---@param tab table

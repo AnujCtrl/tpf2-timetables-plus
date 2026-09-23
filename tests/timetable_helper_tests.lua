@@ -194,6 +194,31 @@ tests[#tests + 1] = function()
     assert(timetableHelper.getLineVehicleCount(9999) == 0, "unknown line")
     assert(timetableHelper.getLineVehicleCount(nil) == 0, "nil line")
 end
+
+-- getTime indexed .gameTime on getComponent's result before checking it, and
+-- getComponent is documented to return nil when the component is absent. So
+-- the `else return 0` below it was dead code, and the real failure was a throw
+-- on the engine thread.
+--
+-- It must also never return 0 as a "failed" clock: decide() compares
+-- now >= departAt, and 0 is never >= anything, so a 0 clock holds every
+-- vehicle forever.
+tests[#tests + 1] = function()
+    fakeApi.install()   -- deliberately no GAME_TIME component
+
+    local ok, result = pcall(timetableHelper.getTime)
+
+    assert(ok, "must not throw when the clock component is missing: " .. tostring(result))
+    assert(result == nil,
+        "an unreadable clock is nil, not 0 - 0 would strand every vehicle, got " .. tostring(result))
+end
+
+tests[#tests + 1] = function()
+    fakeApi.install()
+    fakeApi.setComponent("world", "GAME_TIME", {gameTime = 219889600})
+
+    assert(timetableHelper.getTime() == 219889, "milliseconds to whole seconds")
+end
 return {
     test = function()
         for k, v in pairs(tests) do
